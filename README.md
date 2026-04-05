@@ -1,38 +1,81 @@
-# Quay: Hardened Hypervisor Primitive
+quay
 
-Quay is a bare-metal hypervisor shell designed for security and performance. It boots as a stateless, RAM-resident Unified Kernel Image (UKI).
+A minimal hypervisor host built on Alpine Linux diskless. The installer
+produces a single UKI (quay.efi) — kernel, initramfs, and cmdline fused
+into one EFI binary — registered with the firmware. The host runs entirely
+from RAM. Persistent state lives on a separate storage partition.
 
-### Philosophy
-- **Stateless**: The entire OS runs in RAM (`copytoram=yes`).
-- **Immutable**: The core UKI is a single, signed EFI binary (`quay.efi`).
-- **Manual**: No management layers. Direct QEMU/KVM interaction.
-- **Hardened**: Restricted SSH, sandboxed VM execution, opt-in kernel lockdown.
+QEMU, KVM, IOMMU, hugepages, and a bridge interface are configured.
+No VM management layer is provided or intended. You write your own
+launch scripts.
 
-### Resource Isolation (Baked into UKI)
-- **CPU**: `isolcpus`, `nohz_full`, `rcu_nocbs`.
-- **Memory**: 1G Hugepages reserved at boot by default.
-- **Security**: Hardened SSH and Alpine LBU. Kernel lockdown disabled by default for systems engineering.
 
-### Setup (Alpine Extended ISO)
-1. Boot the [Alpine Extended](https://dl-cdn.alpinelinux.org/alpine/v3.23/releases/x86_64/alpine-extended-3.23.3-x86_64.iso) Live ISO.
-2. Connect to Wi-Fi / Ethernet.
-3. Clone this repository: `git clone https://github.com/user/quay ~/quay`
-4. Identify your partitions and run `./install.sh`. 
-5. Reboot into your new hardened hypervisor.
+### requirements
 
-### Security Recommendation: BIOS/UEFI Hardening
-- **Supervisor Password**: Set a strong BIOS/UEFI supervisor password.
-- **Boot Order**: Disable all boot entries except your primary drive.
-- **Secure Boot**: For maximum security, sign `quay.efi` and enroll your own keys.
+  Hardware
+    x86_64 processor with AMD-V or Intel VT-x
+    UEFI firmware (no BIOS/CSM support)
+    IOMMU (AMD-Vi or Intel VT-d) — only required for device passthrough
+    Two partitions: one FAT32 for the ESP, one ext4 for storage
+      The ESP may be shared with an existing OS. Minimum ~64 MB free.
 
-### Manual VM Execution (Example)
+  Software
+    Alpine Linux Extended live environment
+    Internet access, or a pre-downloaded Alpine ISO passed via `--alpine-iso`
+
+
+### quick start
+
+Boot Alpine Extended. Then:
+
 ```bash
-qemu-system-x86_64 -enable-kvm -cpu host -m 8G \
-  -object memory-backend-file,id=mem,size=8G,mem-path=/dev/hugepages,share=on \
-  -numa node,memdev=mem \
-  -drive file=/mnt/storage/arch.img,format=raw,aio=io_uring \
-  -netdev bridge,id=net0,br=br0 -device virtio-net-pci,netdev=net0 \
-  -runas vmrunner -sandbox on,obsolete=deny,elevateprivileges=deny,spawn=deny,resourcecontrol=deny
+wget https://raw.githubusercontent.com/grewstad/quay/main/install.sh
+sh install.sh
 ```
 
-Detailed guides are available in the `documentation/` directory.
+To clone the full tree first:
+
+```bash
+git clone https://github.com/grewstad/quay.git
+sh quay/install.sh
+```
+
+The installer does not partition. Create your partitions beforehand. See `documentation/02-installation.md` for the full walkthrough.
+
+
+### installation steps
+
+  - Builds `quay.efi` via `forge-uki.sh` (kernel + initramfs + cmdline)
+  - Optionally signs it and generates a PK/KEK/db certificate chain
+  - Registers `quay.efi` with the firmware (EFISTUB) or injects a GRUB menuentry
+  - Registers a second recovery entry with no VFIO or CPU isolation
+  - Configures SSH, a bridge interface, and hugepage allocation
+  - Writes the initial apkovl to the storage partition
+
+
+### files
+
+| Path | Description |
+| :--- | :--- |
+| `/mnt/storage/host.conf` | optional resource reference for launch scripts |
+| `/mnt/storage/vms/` | guest disk images |
+| `/mnt/storage/isos/` | installation media |
+| `/mnt/storage/logs/` | guest logs |
+| `/mnt/storage/secureboot/` | key material (if Secure Boot was selected) |
+| `/mnt/storage/<hostname>.apkovl.tar.gz` | host configuration overlay |
+
+
+### after installation
+
+The host is otherwise unconfigured. Access it locally or via SSH as root. Refer to the `documentation/` directory for reference material and QEMU command templates.
+
+To persist changes to the running host:
+
+```bash
+lbu commit
+```
+
+
+### license
+
+  MIT
