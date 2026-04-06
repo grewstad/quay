@@ -44,6 +44,69 @@ sh quay/install.sh
 The installer does not partition. Create your partitions beforehand. See `documentation/02-installation.md` for the full walkthrough.
 
 
+### exact install procedure (general)
+
+Boot the Alpine Extended USB in UEFI mode, then run:
+
+```bash
+ip addr
+ip link set <your-nic> up
+udhcpc -i <your-nic>
+cd /root
+git clone https://github.com/grewstad/quay.git
+cd quay
+chmod +x preinstall.sh templates/ubuntu-vm-install.sh templates/ubuntu-vm-run.sh
+./preinstall.sh
+sh install.sh
+```
+
+When the installer prompts, use the partitions and devices for your system. For this example system, the answers were:
+
+```text
+esp partition: /dev/nvme0n1p1
+storage partition: /dev/sda3
+cores to isolate for guests: 2-5
+vfio device IDs, comma-separated: 10de:2d04,10de:22eb
+choice [1/2]: 1
+enable secure boot? [y/N]: y
+hostname: quay-host
+root password: <enter a strong password>
+ssh public key: <paste your key or press Enter to generate one>
+```
+
+After installation completes, reboot and remove the USB:
+
+```bash
+reboot
+```
+
+Log in to the installed host. If you are sitting at the desktop, use the local console. Otherwise use SSH.
+
+The host is now ready to use. To save any configuration changes you make later:
+
+```bash
+lbu commit
+```
+
+To install and run Ubuntu as a VM:
+
+```bash
+sudo ./templates/ubuntu-vm-install.sh
+```
+
+After Ubuntu installation finishes, boot the VM:
+
+```bash
+sudo ./templates/ubuntu-vm-run.sh
+```
+
+To boot the VM with GPU passthrough:
+
+```bash
+sudo USE_GPU=1 ./templates/ubuntu-vm-run.sh
+```
+
+
 ### installation steps
 
   - Formats partitions as FAT32 (ESP) and ext4 (storage) if not already formatted
@@ -51,7 +114,7 @@ The installer does not partition. Create your partitions beforehand. See `docume
   - Optionally signs it and generates a PK/KEK/db certificate chain
   - Registers `quay.efi` with the firmware (EFISTUB) or injects a GRUB menuentry
   - Registers a second recovery entry with no VFIO or CPU isolation
-  - Configures SSH, a bridge interface, and hugepage allocation
+  - Configures optional SSH, a bridge interface, and hugepage allocation
   - Writes the initial apkovl to the storage partition
 
 
@@ -69,7 +132,7 @@ The installer does not partition. Create your partitions beforehand. See `docume
 
 ### after installation
 
-The host is otherwise unconfigured. Access it locally or via SSH as root. Refer to the `documentation/` directory for reference material and QEMU command templates.
+The host is otherwise unconfigured. Access it locally on the desktop console, or via SSH as root if you prefer remote management. Refer to the `documentation/` directory for reference material and QEMU command templates.
 
 To persist changes to the running host:
 
