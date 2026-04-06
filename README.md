@@ -18,6 +18,7 @@ launch scripts.
     IOMMU (AMD-Vi or Intel VT-d) — only required for device passthrough
     Two partitions: one FAT32 for the ESP, one ext4 for storage
       The ESP may be shared with an existing OS. Minimum ~64 MB free.
+      Partitions will be formatted if not already in the correct format.
 
   Software
     Alpine Linux Extended live environment
@@ -45,6 +46,7 @@ The installer does not partition. Create your partitions beforehand. See `docume
 
 ### installation steps
 
+  - Formats partitions as FAT32 (ESP) and ext4 (storage) if not already formatted
   - Builds `quay.efi` via `forge-uki.sh` (kernel + initramfs + cmdline)
   - Optionally signs it and generates a PK/KEK/db certificate chain
   - Registers `quay.efi` with the firmware (EFISTUB) or injects a GRUB menuentry

@@ -63,14 +63,68 @@ done
 STORAGE_UUID=$(blkid -s UUID -o value "$STORAGE_PART")
 EFI_UUID=$(blkid -s UUID -o value "$EFI_PART")
 
+# check filesystem types
+EFI_FSTYPE=$(blkid -s TYPE -o value "$EFI_PART" 2>/dev/null || echo "")
+STORAGE_FSTYPE=$(blkid -s TYPE -o value "$STORAGE_PART" 2>/dev/null || echo "")
+
+if [[ -z "$EFI_FSTYPE" ]]; then
+    echo "EFI partition $EFI_PART is not formatted."
+    read -rp "Format as FAT32? [y/N]: " FORMAT_EFI
+    if [[ "${FORMAT_EFI,,}" == "y" ]]; then
+        apk add --quiet dosfstools
+        mkfs.fat -F32 "$EFI_PART"
+        EFI_FSTYPE="vfat"
+        EFI_UUID=$(blkid -s UUID -o value "$EFI_PART")
+    else
+        echo "quay: error: EFI partition must be FAT32"
+        exit 1
+    fi
+elif [[ "$EFI_FSTYPE" != "vfat" ]]; then
+    echo "EFI partition $EFI_PART is $EFI_FSTYPE, not FAT32."
+    read -rp "Reformat as FAT32? [y/N]: " REFORMAT_EFI
+    if [[ "${REFORMAT_EFI,,}" == "y" ]]; then
+        apk add --quiet dosfstools
+        mkfs.fat -F32 "$EFI_PART"
+        EFI_FSTYPE="vfat"
+        EFI_UUID=$(blkid -s UUID -o value "$EFI_PART")
+    else
+        echo "quay: error: EFI partition must be FAT32"
+        exit 1
+    fi
+fi
+
+if [[ -z "$STORAGE_FSTYPE" ]]; then
+    echo "Storage partition $STORAGE_PART is not formatted."
+    read -rp "Format as ext4? [y/N]: " FORMAT_STORAGE
+    if [[ "${FORMAT_STORAGE,,}" == "y" ]]; then
+        apk add --quiet e2fsprogs
+        mkfs.ext4 "$STORAGE_PART"
+        STORAGE_FSTYPE="ext4"
+        STORAGE_UUID=$(blkid -s UUID -o value "$STORAGE_PART")
+    else
+        echo "quay: error: storage partition must be ext4"
+        exit 1
+    fi
+elif [[ "$STORAGE_FSTYPE" != "ext4" ]]; then
+    echo "Storage partition $STORAGE_PART is $STORAGE_FSTYPE, not ext4."
+    read -rp "Reformat as ext4? [y/N]: " REFORMAT_STORAGE
+    if [[ "${REFORMAT_STORAGE,,}" == "y" ]]; then
+        apk add --quiet e2fsprogs
+        mkfs.ext4 "$STORAGE_PART"
+        STORAGE_FSTYPE="ext4"
+        STORAGE_UUID=$(blkid -s UUID -o value "$STORAGE_PART")
+    else
+        echo "quay: error: storage partition must be ext4"
+        exit 1
+    fi
+fi
+
 [[ -z "$STORAGE_UUID" ]] && {
     echo "quay: error: cannot read UUID from $STORAGE_PART"
-    echo "quay: is it formatted? (mkfs.ext4 $STORAGE_PART)"
     exit 1
 }
 [[ -z "$EFI_UUID" ]] && {
     echo "quay: error: cannot read UUID from $EFI_PART"
-    echo "quay: is it formatted as FAT32? (mkfs.fat -F32 $EFI_PART)"
     exit 1
 }
 
