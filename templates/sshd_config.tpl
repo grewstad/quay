@@ -5,7 +5,7 @@ HostKey /etc/ssh/ssh_host_ed25519_key
 
 PermitRootLogin prohibit-password
 PasswordAuthentication no
-ChallengeResponseAuthentication no
+KbdInteractiveAuthentication no
 UsePAM yes
 
 KexAlgorithms curve25519-sha256,curve25519-sha256@libssh.org

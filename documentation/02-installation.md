@@ -32,11 +32,26 @@ If an existing ESP from another OS is available, reuse it. The installer
 writes only under /EFI/Quay/ and will not interfere with other bootloaders.
 
 ### installation procedure
-Start the installer with root privileges:
 
-```bash
-sh install.sh
-```
+1. Boot the **Alpine Linux Extended** USB in **UEFI mode**.
+2. Configure networking (if not automatic):
+   ```bash
+   ip link set <nic> up && udhcpc -i <nic>
+   ```
+3. Configure **APK repositories** to install `git`:
+   ```bash
+   # Add main + community repos
+   VERSION=$(cat /etc/alpine-release | cut -d. -f1,2)
+   printf "http://dl-cdn.alpinelinux.org/alpine/v$VERSION/%s\n" main community > /etc/apk/repositories
+   apk update
+   apk add git
+   ```
+4. Clone the repository and run the scripts:
+   ```bash
+   git clone https://github.com/<user>/quay.git
+   cd quay
+   sh install.sh
+   ```
 
 The script will prompt for the following configuration:
 
@@ -108,8 +123,8 @@ A second **UKI** (`quay-recovery.efi`) is built and registered during install wi
 If you change **VFIO IDs**, **isolcpus**, or **hugepage settings**, rebuild and redeploy the **UKI**:
 
 ```bash
-bash /path/to/quay/forge-uki.sh "$(blkid -s UUID -o value /dev/sdX2)" \
-    "10de:2684,10de:22ba" "1-7,9-15" --sign
+sh /path/to/quay/forge-uki.sh "$(blkid -s UUID -o value /dev/sdX2)" \
+    "<vfio-ids>" "<cpu-range>" --sign
 
 mount /dev/sdX1 /mnt/esp
 cp /tmp/quay.efi /mnt/esp/EFI/Quay/quay.efi

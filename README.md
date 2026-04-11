@@ -27,18 +27,22 @@ launch scripts.
 
 ### quick start
 
-Boot Alpine Extended. Then:
+Boot Alpine Extended. Then, configure repositories to install git/wget:
 
 ```bash
-wget https://raw.githubusercontent.com/grewstad/quay/main/install.sh
-sh install.sh
+# Add main and community repositories
+VERSION=$(cat /etc/alpine-release | cut -d. -f1,2)
+printf "http://dl-cdn.alpinelinux.org/alpine/v$VERSION/%s\n" main community > /etc/apk/repositories
+apk update
+apk add git
 ```
 
-To clone the full tree first:
+Now clone and run:
 
 ```bash
-git clone https://github.com/grewstad/quay.git
-sh quay/install.sh
+git clone https://github.com/<user>/quay.git
+cd quay
+sh install.sh
 ```
 
 The installer does not partition. Create your partitions beforehand. See `documentation/02-installation.md` for the full walkthrough.
@@ -49,11 +53,20 @@ The installer does not partition. Create your partitions beforehand. See `docume
 Boot the Alpine Extended USB in UEFI mode, then run:
 
 ```bash
+# Configure networking if not automatic
 ip addr
 ip link set <your-nic> up
 udhcpc -i <your-nic>
+
+# Add repositories to install git
+VERSION=$(cat /etc/alpine-release | cut -d. -f1,2)
+printf "http://dl-cdn.alpinelinux.org/alpine/v$VERSION/%s\n" main community > /etc/apk/repositories
+apk update
+apk add git
+
+# Clone and run
 cd /root
-git clone https://github.com/grewstad/quay.git
+git clone https://github.com/<user>/quay.git
 cd quay
 chmod +x preinstall.sh templates/ubuntu-vm-install.sh templates/ubuntu-vm-run.sh
 ./preinstall.sh
@@ -63,13 +76,13 @@ sh install.sh
 When the installer prompts, use the partitions and devices for your system. For this example system, the answers were:
 
 ```text
-esp partition: /dev/nvme0n1p1
-storage partition: /dev/sda3
-cores to isolate for guests: 2-5
-vfio device IDs, comma-separated: 10de:2d04,10de:22eb
-choice [1/2]: 1
-enable secure boot? [y/N]: y
-hostname: quay-host
+esp partition: /dev/sdX1
+storage partition: /dev/sdX2
+cores to isolate for guests: <range>
+vfio device IDs, comma-separated: <ids>
+choice [1/2]: <choice>
+enable secure boot? [y/N]: <y/n>
+hostname: <hostname>
 root password: <enter a strong password>
 ssh public key: <paste your key or press Enter to generate one>
 ```
