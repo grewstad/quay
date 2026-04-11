@@ -40,7 +40,7 @@ apk add git
 Now clone and run:
 
 ```bash
-git clone https://github.com/<user>/quay.git
+git clone https://github.com/grewstad/quay.git
 cd quay
 sh install.sh
 ```
@@ -66,7 +66,7 @@ apk add git
 
 # Clone and run
 cd /root
-git clone https://github.com/<user>/quay.git
+git clone https://github.com/grewstad/quay.git
 cd quay
 chmod +x preinstall.sh templates/ubuntu-vm-install.sh templates/ubuntu-vm-run.sh
 ./preinstall.sh
@@ -135,7 +135,6 @@ sudo USE_GPU=1 ./templates/ubuntu-vm-run.sh
 
 | Path | Description |
 | :--- | :--- |
-| `/mnt/storage/host.conf` | optional resource reference for launch scripts |
 | `/mnt/storage/vms/` | guest disk images |
 | `/mnt/storage/isos/` | installation media |
 | `/mnt/storage/logs/` | guest logs |

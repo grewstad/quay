@@ -48,7 +48,7 @@ writes only under /EFI/Quay/ and will not interfere with other bootloaders.
    ```
 4. Clone the repository and run the scripts:
    ```bash
-   git clone https://github.com/<user>/quay.git
+   git clone https://github.com/grewstad/quay.git
    cd quay
    sh install.sh
    ```

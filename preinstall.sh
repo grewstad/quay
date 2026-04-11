@@ -5,7 +5,7 @@
 # to verify your partition layout and print the exact prompt answers
 # needed by install.sh.
 #
-# https://github.com/<user>/quay
+# https://github.com/grewstad/quay
 set -e
 
 # ── configuration ─────────────────────────────────────────────────────────────
@@ -55,12 +55,17 @@ EOF
 echo "preinstall: apk repositories set to ${REPO_BRANCH}/main and ${REPO_BRANCH}/community"
 apk update --quiet
 
+# ── dependencies ──────────────────────────────────────────────────────────────
+
+echo "preinstall: verifying build tools"
+apk add --quiet blkid dosfstools e2fsprogs util-linux >/dev/null 2>&1
+
 # ── filesystem check / format ─────────────────────────────────────────────────
 
 EFI_TYPE=$(blkid -s TYPE -o value "$EFI_PART" 2>/dev/null || true)
 if [ "$EFI_TYPE" != "vfat" ]; then
     echo "preinstall: $EFI_PART is ${EFI_TYPE:-unformatted}, not FAT32"
-    printf "Format %s as FAT32? [y/N]: " "$EFI_PART"
+    printf "format %s as FAT32? (destructive) [y/N]: " "$EFI_PART"
     read -r answer
     case "$(echo "$answer" | tr '[:upper:]' '[:lower:]')" in
         y|yes)
@@ -77,7 +82,7 @@ fi
 STORAGE_TYPE=$(blkid -s TYPE -o value "$STORAGE_PART" 2>/dev/null || true)
 if [ "$STORAGE_TYPE" != "ext4" ]; then
     echo "preinstall: $STORAGE_PART is ${STORAGE_TYPE:-unformatted}, not ext4"
-    printf "Format %s as ext4? [y/N]: " "$STORAGE_PART"
+    printf "format %s as ext4? (destructive) [y/N]: " "$STORAGE_PART"
     read -r answer
     case "$(echo "$answer" | tr '[:upper:]' '[:lower:]')" in
         y|yes)

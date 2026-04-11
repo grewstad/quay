@@ -4,7 +4,7 @@
 #
 # usage: forge-uki.sh <storage_uuid> [vfio_ids] [iso_cores] [--sign]
 #
-# https://github.com/<user>/quay
+# https://github.com/grewstad/quay
 set -e
 
 # ── arguments ─────────────────────────────────────────────────────────────────
@@ -29,23 +29,31 @@ die() { echo "quay-forge: error: $*" >&2; exit 1; }
 align_4k() { echo "$(( ($1 + 4095) / 4096 * 4096 ))"; }
 
 # ── dependencies ──────────────────────────────────────────────────────────────
+# most of these are pre-installed by install.sh; check before installing
 
-apk add --quiet binutils >/dev/null 2>&1
+check_pkg() { command -v "$1" >/dev/null 2>&1; }
 
-# try systemd-boot first, fall back to systemd-efistub
-if ! apk add --quiet systemd-boot >/dev/null 2>&1; then
-    apk add --quiet systemd-efistub >/dev/null 2>&1 \
-        || die "cannot install EFI stub package (tried systemd-boot, systemd-efistub)"
+check_pkg objcopy || apk add --quiet binutils >/dev/null 2>&1
+
+if ! check_pkg systemd-creds; then # systemd-creds is a proxy for efistub tools
+    if ! apk add --quiet systemd-efistub >/dev/null 2>&1; then
+        apk add --quiet systemd-boot >/dev/null 2>&1 \
+            || die "cannot install EFI stub package (tried systemd-efistub, systemd-boot)"
+    fi
 fi
 
 if [ "$SIGN" = "true" ]; then
-    apk add --quiet sbsigntools openssl efitools >/dev/null 2>&1
+    check_pkg sbsign || apk add --quiet sbsigntool >/dev/null 2>&1
+    check_pkg openssl || apk add --quiet openssl >/dev/null 2>&1
+    check_pkg cert-to-efi-sig-list || apk add --quiet efitools >/dev/null 2>&1
 fi
 
 # ── locate build artefacts ────────────────────────────────────────────────────
 
-STUB=$(find /usr/lib -name "linuxx64.efi.stub" 2>/dev/null | head -n 1)
-[ -n "$STUB" ] || die "linuxx64.efi.stub not found; is systemd-boot installed?"
+# look in standard Alpine systemd-efistub location first
+STUB=$(find /usr/lib/systemd/boot/efi -name "linuxx64.efi.stub" 2>/dev/null | head -n 1)
+[ -n "$STUB" ] || STUB=$(find /usr/lib -name "linuxx64.efi.stub" 2>/dev/null | head -n 1)
+[ -n "$STUB" ] || die "linuxx64.efi.stub not found; is systemd-efistub installed?"
 
 KERNEL=$(ls /boot/vmlinuz-* 2>/dev/null | head -n 1)
 INITRD=$(ls /boot/initramfs-* 2>/dev/null | head -n 1)
@@ -100,10 +108,10 @@ KERN_SIZE=$(stat -c%s "$KERNEL")
 
 VMA_OSREL=131072   # 0x20000 — well above the PE header region
 VMA_CMDLINE=$(( VMA_OSREL   + $(align_4k "$OSREL_SIZE") ))
-VMA_LINUX=$(( VMA_CMDLINE   + $(align_4k "$CMDL_SIZE")  + 1048576 ))
-VMA_INITRD=$(( VMA_LINUX    + $(align_4k "$KERN_SIZE")  + 1048576 ))
+VMA_LINUX=$(( VMA_CMDLINE   + $(align_4k "$CMDL_SIZE")  + 1048576 )) # +1MB safety gap
+VMA_INITRD=$(( VMA_LINUX    + $(align_4k "$KERN_SIZE")  + 1048576 )) # +1MB safety gap
 
-printf "quay-forge: vma  .osrel=0x%x  .cmdline=0x%x  .linux=0x%x  .initrd=0x%x\n" \
+printf "quay-forge: layout: .osrel=0x%x .cmdline=0x%x .linux=0x%x .initrd=0x%x\n" \
     $VMA_OSREL $VMA_CMDLINE $VMA_LINUX $VMA_INITRD
 
 # ── fuse ─────────────────────────────────────────────────────────────────────

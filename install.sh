@@ -2,18 +2,57 @@
 # install.sh — quay installer
 #
 # pull and run from any alpine linux live environment:
-#   wget https://raw.githubusercontent.com/<user>/quay/main/install.sh
+#   wget https://raw.githubusercontent.com/grewstad/quay/main/install.sh
 #   sh install.sh
 #
-# https://github.com/<user>/quay
+# https://github.com/grewstad/quay
 set -e
 
 QUAY_DIR="$(cd "$(dirname "$0")" && pwd)"
 SB_DIR="/mnt/storage/secureboot"
+STATE_FILE="/tmp/quay_install.state"
+
+# ── state management ──────────────────────────────────────────────────────────
+
+save_var() {
+    # save_var NAME VALUE -> appends export NAME='VALUE' to state file
+    # escapes single quotes for safe shell sourcing
+    _escaped=$(echo "$2" | sed "s/'/'\\\\''/g")
+    echo "export $1='$_escaped'" >> "$STATE_FILE"
+}
+
+mark_step() {
+    # mark_step STEP_NAME -> records a step as completed
+    echo "export DONE_STEP_$1=1" >> "$STATE_FILE"
+}
+
+load_state() {
+    [ -f "$STATE_FILE" ] || return 0
+    echo "quay: found existing installation state at $STATE_FILE"
+    printf "resume previous session? [Y/n]: "
+    read -r _ans
+    case "$(echo "$_ans" | tr '[:upper:]' '[:lower:]')" in
+        n|no)
+            echo "quay: starting fresh; previous state cleared"
+            rm -f "$STATE_FILE"
+            ;;
+        *)
+            echo "quay: resuming..."
+            . "$STATE_FILE"
+            ;;
+    esac
+}
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
 die() { echo "quay: error: $*" >&2; exit 1; }
+
+guarded_mount() {
+    # guarded_mount <device> <mountpoint>
+    if ! grep -q -w "$2" /proc/mounts; then
+        mount "$1" "$2" || die "cannot mount $1 to $2"
+    fi
+}
 
 ask_yn() {
     # ask_yn "prompt" → returns 0 for yes, 1 for no
@@ -38,9 +77,11 @@ cleanup() {
     umount /mnt/storage 2>/dev/null || true
 }
 trap cleanup EXIT INT TERM
+load_state
 
 # ── apk repositories ─────────────────────────────────────────────────────────
-# The Alpine live ISO ships with a minimal/volatile repo config.
+if [ -z "$DONE_STEP_REPOS" ]; then
+    # The Alpine live ISO ships with a minimal/volatile repo config.
 # Add main + community so git, zsh, and other tools are installable
 # both now and after first boot.
 
@@ -58,13 +99,15 @@ ${REPO_BASE}/${REPO_BRANCH}/main
 ${REPO_BASE}/${REPO_BRANCH}/community
 EOF
 
-echo "quay: apk repositories set to ${REPO_BRANCH}/main and ${REPO_BRANCH}/community"
-apk update --quiet
+    echo "quay: apk repositories set to ${REPO_BRANCH}/main and ${REPO_BRANCH}/community"
+    apk update --quiet
+    mark_step REPOS
+fi
 
 # ── dependencies ──────────────────────────────────────────────────────────────
-
-echo "quay: installing packages"
-apk add --quiet \
+if [ -z "$DONE_STEP_PACKAGES" ]; then
+    echo "quay: installing packages"
+    apk add --quiet \
     openssh efibootmgr socat \
     qemu-system-x86_64 qemu-img bridge-utils \
     zsh zsh-completions \
@@ -77,11 +120,14 @@ apk add --quiet \
     e2fsprogs dosfstools \
     util-linux lsblk blkid parted \
     tcpdump bind-tools \
-    shadow tmux
+    shadow tmux uuidgen \
+    binutils systemd-efistub efitools
+    mark_step PACKAGES
+fi
 
 # ── partitions ────────────────────────────────────────────────────────────────
-
-echo ""
+if [ -z "$DONE_STEP_PARTITIONS" ]; then
+    echo ""
 echo "two partitions are required:"
 echo "  esp     FAT32, at least 64 MB free; may be shared with an existing OS"
 echo "  storage ext4, for VM images, ISOs, and host configuration"
@@ -94,11 +140,17 @@ read -r EFI_PART
 printf "storage partition: "
 read -r STORAGE_PART
 
-[ -b "$EFI_PART" ]     || die "not a block device: $EFI_PART"
-[ -b "$STORAGE_PART" ] || die "not a block device: $STORAGE_PART"
-[ "$EFI_PART" != "$STORAGE_PART" ] || die "esp and storage must be different partitions"
+    [ -b "$EFI_PART" ]     || die "not a block device: $EFI_PART"
+    [ -b "$STORAGE_PART" ] || die "not a block device: $STORAGE_PART"
+    [ "$EFI_PART" != "$STORAGE_PART" ] || die "esp and storage must be different partitions"
+
+    save_var EFI_PART "$EFI_PART"
+    save_var STORAGE_PART "$STORAGE_PART"
+    mark_step PARTITIONS
+fi
 
 # ── format / verify filesystems ──────────────────────────────────────────────
+if [ -z "$DONE_STEP_FILESYSTEM" ]; then
 
 format_efi() {
     apk add --quiet dosfstools
@@ -134,12 +186,17 @@ case "$STORAGE_FSTYPE" in
         echo "quay: $STORAGE_PART is $STORAGE_FSTYPE, not ext4"
         ask_yn "reformat as ext4? (destructive)" && format_storage || die "storage partition must be ext4"
         ;;
-esac
+    esac
+    mark_step FILESYSTEM
+fi
 
 EFI_UUID=$(blkid -s UUID -o value "$EFI_PART")
 STORAGE_UUID=$(blkid -s UUID -o value "$STORAGE_PART")
 [ -n "$EFI_UUID" ]     || die "cannot read UUID from $EFI_PART"
 [ -n "$STORAGE_UUID" ] || die "cannot read UUID from $STORAGE_PART"
+
+save_var EFI_UUID "$EFI_UUID"
+save_var STORAGE_UUID "$STORAGE_UUID"
 
 echo ""
 echo "  esp     $EFI_PART  ($EFI_UUID)"
@@ -147,11 +204,11 @@ echo "  storage $STORAGE_PART  ($STORAGE_UUID)"
 echo ""
 
 mkdir -p /mnt/storage
-mount "$STORAGE_PART" /mnt/storage || die "cannot mount $STORAGE_PART"
+guarded_mount "$STORAGE_PART" /mnt/storage
 
 # ── hardware ──────────────────────────────────────────────────────────────────
-
-echo "cpu topology:"
+if [ -z "$DONE_STEP_HARDWARE" ]; then
+    echo "cpu topology:"
 lscpu -e=CPU,CORE,SOCKET 2>/dev/null || lscpu
 echo ""
 printf "cores to isolate for guests (e.g. 1-3,5-7) [enter to skip]: "
@@ -164,15 +221,20 @@ echo ""
 printf "vfio device IDs, comma-separated (e.g. 10de:2684,10de:22ba) [enter to skip]: "
 read -r VFIO_IDS
 
-# validate VFIO ID format if provided
-if [ -n "$VFIO_IDS" ]; then
-    _check=$(echo "$VFIO_IDS" | tr -d '0-9a-fA-F:,')
-    [ -z "$_check" ] || die "invalid VFIO IDs format: $VFIO_IDS"
+    # validate VFIO ID format if provided
+    if [ -n "$VFIO_IDS" ]; then
+        _check=$(echo "$VFIO_IDS" | tr -d '0-9a-fA-F:,')
+        [ -z "$_check" ] || die "invalid VFIO IDs format: $VFIO_IDS"
+    fi
+
+    save_var ISO_CORES "$ISO_CORES"
+    save_var VFIO_IDS "$VFIO_IDS"
+    mark_step HARDWARE
 fi
 
 # ── bootloader ────────────────────────────────────────────────────────────────
-
-echo ""
+if [ -z "$DONE_STEP_BOOTLOADER" ]; then
+    echo ""
 echo "boot method:"
 echo "  1  efistub  quay.efi registered directly with UEFI firmware (recommended)"
 echo "              quay is placed first in boot order; no bootloader required"
@@ -182,11 +244,15 @@ echo ""
 printf "choice [1/2]: "
 read -r BOOTLOADER_CHOICE
 
-case "$BOOTLOADER_CHOICE" in
-    1) BOOT_MODE="efistub" ;;
-    2) BOOT_MODE="grub"    ;;
-    *) die "invalid boot choice: $BOOTLOADER_CHOICE" ;;
-esac
+    case "$BOOTLOADER_CHOICE" in
+        1) BOOT_MODE="efistub" ;;
+        2) BOOT_MODE="grub"    ;;
+        *) die "invalid boot choice: $BOOTLOADER_CHOICE" ;;
+    esac
+
+    save_var BOOT_MODE "$BOOT_MODE"
+    mark_step BOOTLOADER
+fi
 
 # ── secure boot ───────────────────────────────────────────────────────────────
 
@@ -208,27 +274,34 @@ echo "  physical access from bypassing this (done in firmware UI)."
 echo ""
 
 SECURE_BOOT=false
-ask_yn "enable secure boot?" && SECURE_BOOT=true
+if [ -z "$DONE_STEP_SECURE_BOOT_CONFIG" ]; then
+    ask_yn "enable secure boot?" && SECURE_BOOT=true
 
-SETUP_MODE=false
-if [ "$SECURE_BOOT" = "true" ]; then
-    apk add --quiet sbsigntools openssl efitools
+    SETUP_MODE=false
+    if [ "$SECURE_BOOT" = "true" ]; then
+        apk add --quiet sbsigntool openssl efitools
 
-    SETUP_VAR="/sys/firmware/efi/efivars/SetupMode-8be4df61-93ca-11d2-aa0d-00e098032b8c"
-    if [ -f "$SETUP_VAR" ]; then
-        # byte 4 (skip 4-byte EFI attribute header) is the mode flag
-        SM_BYTE=$(dd if="$SETUP_VAR" bs=1 skip=4 count=1 2>/dev/null | hexdump -ve '1/1 "%02x"')
-        [ "$SM_BYTE" = "01" ] && SETUP_MODE=true
+        SETUP_VAR="/sys/firmware/efi/efivars/SetupMode-8be4df61-93ca-11d2-aa0d-00e098032b8c"
+        if [ -f "$SETUP_VAR" ]; then
+            # byte 4 (skip 4-byte EFI attribute header) is the mode flag
+            SM_BYTE=$(dd if="$SETUP_VAR" bs=1 skip=4 count=1 2>/dev/null | hexdump -ve '1/1 "%02x"')
+            [ "$SM_BYTE" = "01" ] && SETUP_MODE=true
+        fi
+
+        if [ "$SETUP_MODE" = "true" ]; then
+            echo "quay: firmware is in setup mode — keys will be enrolled automatically"
+        else
+            echo "quay: firmware is not in setup mode — enrollment will be deferred"
+        fi
     fi
-
-    if [ "$SETUP_MODE" = "true" ]; then
-        echo "quay: firmware is in setup mode — keys will be enrolled automatically"
-    else
-        echo "quay: firmware is not in setup mode — enrollment will be deferred"
-    fi
+    save_var SECURE_BOOT "$SECURE_BOOT"
+    save_var SETUP_MODE "$SETUP_MODE"
+    mark_step SECURE_BOOT_CONFIG
 fi
 
 # ── identity ──────────────────────────────────────────────────────────────────
+if [ -z "$DONE_STEP_IDENTITY" ]; then
+    echo ""
 
 echo ""
 printf "hostname: "
@@ -266,22 +339,29 @@ getent passwd vmrunner >/dev/null 2>&1 || adduser -S -D -H -s /sbin/nologin vmru
 addgroup vmrunner kvm  2>/dev/null || true
 addgroup vmrunner disk 2>/dev/null || true
 
-# set zsh as root's default shell
-chsh -s /bin/zsh root 2>/dev/null || usermod -s /bin/zsh root 2>/dev/null || true
+    # set zsh as root's default shell
+    chsh -s /bin/zsh root 2>/dev/null || usermod -s /bin/zsh root 2>/dev/null || true
+
+    save_var NEW_HOSTNAME "$NEW_HOSTNAME"
+    save_var PUBKEY "$PUBKEY"
+    mark_step IDENTITY
+fi
 
 # ── forge UKI ─────────────────────────────────────────────────────────────────
 
 echo ""
-echo "quay: forging UKI"
-if [ "$SECURE_BOOT" = "true" ]; then
-    sh "$QUAY_DIR/forge-uki.sh" "$STORAGE_UUID" "$VFIO_IDS" "$ISO_CORES" --sign
-else
-    sh "$QUAY_DIR/forge-uki.sh" "$STORAGE_UUID" "$VFIO_IDS" "$ISO_CORES"
+if [ -z "$DONE_STEP_FORGE_UKI" ]; then
+    if [ "$SECURE_BOOT" = "true" ]; then
+        sh "$QUAY_DIR/forge-uki.sh" "$STORAGE_UUID" "$VFIO_IDS" "$ISO_CORES" --sign
+    else
+        sh "$QUAY_DIR/forge-uki.sh" "$STORAGE_UUID" "$VFIO_IDS" "$ISO_CORES"
+    fi
+    mark_step FORGE_UKI
 fi
 
 # ── secure boot key chain ────────────────────────────────────────────────────
 
-if [ "$SECURE_BOOT" = "true" ]; then
+if [ "$SECURE_BOOT" = "true" ] && [ -z "$DONE_STEP_KEY_CHAIN" ]; then
     echo "quay: generating PK/KEK/db certificate chain"
     GUID=$(uuidgen)
     mkdir -p "$SB_DIR"
@@ -319,6 +399,10 @@ if [ "$SECURE_BOOT" = "true" ]; then
     sign-efi-sig-list -k "$SB_DIR/PK.key"  -c "$SB_DIR/PK.crt"  KEK "$SB_DIR/KEK.esl" "$SB_DIR/KEK.auth"
     sign-efi-sig-list -k "$SB_DIR/KEK.key" -c "$SB_DIR/KEK.crt" db  "$SB_DIR/db.esl"  "$SB_DIR/db.auth"
 
+    mark_step KEY_CHAIN
+fi
+
+if [ "$SECURE_BOOT" = "true" ] && [ -z "$DONE_STEP_ENROLL" ]; then
     if [ "$SETUP_MODE" = "true" ]; then
         echo "quay: enrolling keys (db → KEK → PK)"
         # db first, then KEK, then PK. PK enrollment exits setup mode.
@@ -338,7 +422,7 @@ if [ "$SECURE_BOOT" = "true" ]; then
 
         # copy .auth files to ESP and write a UEFI shell enrollment script
         mkdir -p /mnt/esp
-        mount "$EFI_PART" /mnt/esp || die "cannot mount $EFI_PART"
+        guarded_mount "$EFI_PART" /mnt/esp
         mkdir -p /mnt/esp/EFI/Quay
         cp "$SB_DIR/db.auth"  /mnt/esp/EFI/Quay/db.auth
         cp "$SB_DIR/KEK.auth" /mnt/esp/EFI/Quay/KEK.auth
@@ -353,15 +437,16 @@ echo done. reboot to activate.
 EFIEOF
         umount /mnt/esp
     fi
+    mark_step ENROLL
 fi
 
 # ── deploy ────────────────────────────────────────────────────────────────────
-
-echo "quay: deploying"
-mkdir -p /mnt/esp
-mount "$EFI_PART" /mnt/esp || die "cannot mount $EFI_PART"
-mkdir -p /mnt/esp/EFI/Quay
-cp /tmp/quay.efi /mnt/esp/EFI/Quay/quay.efi
+if [ -z "$DONE_STEP_DEPLOY" ]; then
+    echo "quay: deploying"
+    mkdir -p /mnt/esp
+    guarded_mount "$EFI_PART" /mnt/esp
+    mkdir -p /mnt/esp/EFI/Quay
+    cp /tmp/quay.efi /mnt/esp/EFI/Quay/quay.efi
 
 if [ "$BOOT_MODE" = "efistub" ]; then
     # derive parent disk and partition number from sysfs — no lsblk needed
@@ -379,8 +464,8 @@ if [ "$BOOT_MODE" = "efistub" ]; then
     DISK="/dev/${PARENT_KNAME}"
     [ -b "$DISK" ] || die "parent disk $DISK is not a block device"
 
-    # remove stale quay boot entries
-    efibootmgr | awk '/Quay/{gsub(/^Boot|[*].*/,""); print}' \
+    # remove stale quay boot entries (match exact label)
+    efibootmgr | awk '/[* ]Quay$/{gsub(/^Boot|[*].*/,""); print}' \
         | while read -r id; do efibootmgr -b "$id" -B >/dev/null 2>&1 || true; done
 
     efibootmgr -c -L "Quay" \
@@ -388,7 +473,11 @@ if [ "$BOOT_MODE" = "efistub" ]; then
         -l "\\EFI\\Quay\\quay.efi" >/dev/null || die "efibootmgr failed"
 
     echo "quay: building recovery UKI (no VFIO, no isolcpus)"
-    sh "$QUAY_DIR/forge-uki.sh" "$STORAGE_UUID" "" ""
+    if [ "$SECURE_BOOT" = "true" ]; then
+        sh "$QUAY_DIR/forge-uki.sh" "$STORAGE_UUID" "" "" --sign
+    else
+        sh "$QUAY_DIR/forge-uki.sh" "$STORAGE_UUID" "" ""
+    fi
     cp /tmp/quay.efi /mnt/esp/EFI/Quay/quay-recovery.efi
 
     efibootmgr -c -L "Quay (recovery)" \
@@ -401,7 +490,11 @@ if [ "$BOOT_MODE" = "efistub" ]; then
         CURRENT_ORDER=$(efibootmgr | awk '/^BootOrder:/{print $2}')
         FILTERED_ORDER=$(echo "$CURRENT_ORDER" | tr ',' '\n' \
             | grep -iv "^${QUAY_NUM}$" | tr '\n' ',' | sed 's/,$//')
-        efibootmgr -o "${QUAY_NUM},${FILTERED_ORDER}" >/dev/null
+        if [ -n "$FILTERED_ORDER" ]; then
+            efibootmgr -o "${QUAY_NUM},${FILTERED_ORDER}" >/dev/null
+        else
+            efibootmgr -o "${QUAY_NUM}" >/dev/null
+        fi
         echo "quay: boot order updated; quay is first"
     fi
 
@@ -448,7 +541,11 @@ menuentry "Quay (recovery)" {
 EOF
 
     echo "quay: building recovery UKI"
-    sh "$QUAY_DIR/forge-uki.sh" "$STORAGE_UUID" "" ""
+    if [ "$SECURE_BOOT" = "true" ]; then
+        sh "$QUAY_DIR/forge-uki.sh" "$STORAGE_UUID" "" "" --sign
+    else
+        sh "$QUAY_DIR/forge-uki.sh" "$STORAGE_UUID" "" ""
+    fi
     cp /tmp/quay.efi /mnt/esp/EFI/Quay/quay-recovery.efi
 
     if command -v update-grub >/dev/null 2>&1; then
@@ -463,11 +560,13 @@ EOF
     fi
 fi
 
-umount /mnt/esp
+    umount /mnt/esp
+    mark_step DEPLOY
+fi
 
 # ── network + ssh ─────────────────────────────────────────────────────────────
-
-# detect first physical (non-loopback, non-virtual) network interface via sysfs
+if [ -z "$DONE_STEP_CONFIG" ]; then
+    # detect first physical (non-loopback, non-virtual) network interface via sysfs
 PRIMARY_NIC=""
 for _iface in /sys/class/net/*; do
     _name=$(basename "$_iface")
@@ -524,17 +623,6 @@ apk cache download >/dev/null 2>&1 || true
 
 mkdir -p /mnt/storage/vms /mnt/storage/isos /mnt/storage/logs
 
-cat > /mnt/storage/host.conf << 'EOF'
-# host.conf — resource reference for your own launch scripts
-# nothing in quay reads this file automatically
-
-HOST_CORES=""         # CPUs the host runs on (complement of isolcpus)
-VM_CORES=""           # CPUs available to guests
-HOST_HUGEPAGES="0"    # 2MB hugepages to allocate at boot (0 = disabled)
-BRIDGE_IFACE="br0"    # bridge interface configured by install
-STORAGE="/mnt/storage"
-EOF
-
 # add all persistent files to lbu tracking
 for f in \
     /etc/network/interfaces \
@@ -555,7 +643,10 @@ done
 lbu commit -d /mnt/storage >/dev/null 2>&1 \
     || lbu pkg "/mnt/storage/${NEW_HOSTNAME}.apkovl.tar.gz" >/dev/null 2>&1
 
-umount /mnt/storage
+    umount /mnt/storage
+    mark_step CONFIG
+    mark_step FINISHED
+fi
 
 # ── done ──────────────────────────────────────────────────────────────────────
 
@@ -575,6 +666,5 @@ echo "  repos    ${REPO_BRANCH}/main + community"
 echo ""
 echo "reboot, then:"
 echo "  ssh root@<ip>"
-echo "  cat /mnt/storage/host.conf"
 echo "  lbu commit   # to persist future changes"
 echo ""

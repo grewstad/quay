@@ -64,7 +64,6 @@ cache/                       APK package cache (symlinked from /var/cache/apk)
 vms/                         guest disk images
 isos/                        installation media
 logs/                        guest console and kernel logs
-host.conf                    optional resource reference for launch scripts
 modloop-lts                  kernel modules squashfs (loaded at boot)
 secureboot/                  PKI material (present if Secure Boot enabled)
 ```
@@ -73,21 +72,6 @@ If /mnt/storage fails to mount at boot, verify the storage partition UUID
 in /etc/lbu/lbu.conf matches the actual partition:
 
     blkid -s UUID -o value /dev/<storage_partition>
-
-**host.conf reference**
-
-host.conf is an optional configuration file for your own launch scripts. Quay
-reads it only if your scripts do so. The installer creates it with the
-following variables:
-
-    HOST_CORES=""         # CPUs the host runs on (complement of isolcpus)
-    VM_CORES=""           # CPUs available to guests
-    HOST_HUGEPAGES="0"    # 2MB hugepages to allocate at boot (0 = disabled)
-    BRIDGE_IFACE="br0"    # bridge interface configured by install
-    STORAGE="/mnt/storage"
-
-Edit these values to match your hardware and desired allocation. The installer
-computes initial values based on what you specified during install.
 
 **package persistence**
 

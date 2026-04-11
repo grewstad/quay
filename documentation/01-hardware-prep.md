@@ -81,13 +81,19 @@ table and prompt for a range.
 
 ### HUGEPAGES
 
-Quay allocates **2 MB hugepages** by default. These are supported on all x86_64 processors. The number to allocate is set in `host.conf` after install; the initial value is 0 (disabled). Enable them to reduce **TLB pressure** for memory-intensive guests:
+Quay supports **2 MB hugepages** by default. These are supported on all x86_64 processors and should be allocated to reduce **TLB pressure** for memory-intensive guests.
 
+To check current allocation:
 ```bash
 grep HugePages /proc/meminfo
 ```
 
-As a rough guide: allocate enough pages to cover the total RAM you intend to hand to guests. Each page is 2 MB. For 16 GB of guest RAM, that is 8192 pages.
+To allocate pages at runtime (e.g. for 16 GB of guest RAM):
+```bash
+echo 8192 > /proc/sys/vm/nr_hugepages
+lbu commit # to persist the sysctl setting
+```
+Each page is 2 MB. Allocate enough pages to cover the total RAM you intend to hand to guests.
 
 
 ---

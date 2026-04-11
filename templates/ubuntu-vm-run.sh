@@ -20,6 +20,11 @@ die() { echo "ubuntu-vm-run: error: $*" >&2; exit 1; }
 
 [ -f "$DISK_PATH" ] || die "disk image not found: $DISK_PATH"
 
+# verify network bridge exists
+if ! ip link show "$BRIDGE" >/dev/null 2>&1; then
+    die "network bridge '$BRIDGE' not found. run install.sh or configure it manually."
+fi
+
 # build QEMU display/GPU arguments
 if [ "$USE_GPU" = "1" ]; then
     [ -n "$GPU_ID" ]       || die "GPU_ID is not set (e.g. GPU_ID=01:00.0)"
