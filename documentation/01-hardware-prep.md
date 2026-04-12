@@ -32,6 +32,14 @@ The ideal Quay setup uses an **iGPU** (integrated) for the host console and a **
 
 **BIOS Requirement**: Set "Primary Graphics Adapter" to **Internal/iGPU**. This ensures the host console doesn't "claim" the discrete card, leaving it clean for VM use.
 
+### Display Behavior & Single-GPU Passthrough
+Due to VFIO passthrough, the host's relationship with the GPU changes:
+
+1. **Bootup**: The kernel uses a basic **EFI Framebuffer** (EFIFB) to display text on your monitor during boot. You will see the Alpine TTY prompt even on a system with only one GPU.
+2. **The "Freeze"**: When you start a VM with `USE_GPU=1`, the dGPU is handed over to the virtual machine. At this moment, the host console on that monitor will "freeze" or disappear as the VM takes control of the physical pixels.
+3. **Control**: On a single-GPU system, once the VM is running, you must manage the host via **SSH** or by shutting down the VM from within the guest OS to return to the host console.
+4. **Dual-GPU**: On systems with an iGPU, the TTY stays active on the iGPU monitor at all times, independent of the VM.
+
 ### iommu verification
 After enabling IOMMU in firmware and booting any Linux:
 
