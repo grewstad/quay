@@ -1,37 +1,33 @@
-#!/usr/sbin/nft -f
-
-flush ruleset
-
 table inet filter {
     chain input {
-        type filter hook input priority 0; policy drop;
+        type filter hook input priority filter; policy drop;
 
-        # established/related connections
-        ct state { established, related } accept
-
-        # loopback interface
         iifname "lo" accept
+        ct state established,related accept
 
-        # icmp (ping)
+        # allow DHCP client responses — arrive as NEW conntrack state,
+        # not established/related, so must be explicitly accepted
+        udp dport 68 accept
+
+        # ICMPv6 is required for IPv6 Neighbor Discovery Protocol (NDP).
+        # without this rule, IPv6 address resolution fails entirely.
+        meta l4proto ipv6-icmp accept
+
+        # basic IPv4 ICMP
         icmp type echo-request accept
-        icmpv6 type { echo-request, nd-neighbor-solicit, nd-neighbor-advert, nd-router-solicit, nd-router-advert } accept
 
-        # ssh management
+        # block SSH originating from bridge — VMs cannot reach host management
+        iifname "{{BRIDGE}}" tcp dport 22 drop
+
+        # allow SSH from all other interfaces (physical NIC, management network)
         tcp dport 22 accept
     }
 
     chain forward {
-        type filter hook forward priority 0; policy drop;
-
-        # allow traffic across the bridge for VMs
-        iifname "br0" oifname "br0" accept
-        
-        # allow VMs to access the internet (if br0 is routed)
-        iifname "br0" accept
-        ct state { established, related } accept
+        type filter hook forward priority filter; policy accept;
     }
 
     chain output {
-        type filter hook output priority 0; policy accept;
+        type filter hook output priority filter; policy accept;
     }
 }

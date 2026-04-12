@@ -17,6 +17,13 @@ STORAGE_PART=""       # e.g. /dev/sda3 — ext4 storage partition
 ISOLATE_CPUS=""       # e.g. "2-5,8-11" — CPU range to reserve for guests
 HUGEPAGE_COUNT=""     # e.g. "2048" — number of 2MB hugepages to reserve
 VFIO_IDS=""           # e.g. "10de:2684,10de:22ba" — PCI IDs to pass through
+# validate VFIO ID format
+if [ -n "$VFIO_IDS" ]; then
+    _check=$(echo "$VFIO_IDS" | tr -d '0-9a-fA-F:,')
+    if [ -n "$_check" ]; then
+        die "invalid VFIO_IDS format: $VFIO_IDS"
+    fi
+fi
 SECURE_BOOT="n"       # y to enable secure boot key generation + signing
 HOSTNAME="quay-host"  # hostname for the installed system
 SSH_KEY_FILE="$HOME/.ssh/id_ed25519.pub"  # leave empty to generate a keypair
@@ -39,11 +46,10 @@ for dev in "$EFI_PART" "$STORAGE_PART" ${BOOT_PART:-}; do
     [ -n "$dev" ] && [ -b "$dev" ] || die "block device $dev does not exist"
 done
 
-# check EFI partition size
-# shellcheck disable=SC2046
-EFI_SIZE_KB=$(df -k "$EFI_PART" | awk 'NR==2 {print $2}')
-if [ "${EFI_SIZE_KB:-0}" -lt 65536 ]; then
-    echo "preinstall: warning: EFI partition ($EFI_PART) is small (${EFI_SIZE_KB:-0}KB)"
+# check EFI partition size correctly
+EFI_SIZE_BYTES=$(blockdev --getsize64 "$EFI_PART" 2>/dev/null || echo 0)
+if [ "$EFI_SIZE_BYTES" -lt 67108864 ]; then
+    echo "preinstall: warning: EFI partition ($EFI_PART) is small ($((EFI_SIZE_BYTES / 1024))KB)"
     echo "            installation will attempt ultra-slim UKI optimization if needed."
 fi
 
@@ -125,7 +131,7 @@ echo "storage partition:  $STORAGE_PART  ($STORAGE_TYPE)"
 echo "isolcpus:          ${ISOLATE_CPUS:-<none>}"
 echo "hugepages:         ${HUGEPAGE_COUNT:-<none>}"
 echo "vfio IDs:          ${VFIO_IDS:-<none>}"
-echo "boot method:       efistub (hardcoded)"
+echo "boot method:       efistub | grub (user choice)"
 echo "secure boot:       $SECURE_BOOT"
 echo "hostname:          $HOSTNAME"
 
