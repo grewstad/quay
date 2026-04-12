@@ -274,388 +274,388 @@ fi
 echo ""
 echo "secure boot:"
 echo "  quay can generate a PK/KEK/db certificate chain and sign the UKI,"
-echo "  giving you sole control over what the firmware will execute."
-echo ""
-echo "  for automatic key enrollment, your firmware must be in setup mode:"
-echo "  look for 'reset secure boot keys' or 'clear secure boot keys' under"
-echo "  the security tab in your firmware UI. exact wording varies by vendor."
-echo ""
-echo "  if not in setup mode, keys are generated and the UKI is signed, but"
-echo "  enrollment must be done manually from the firmware UI after install."
-echo ""
-echo "  note: once quay controls the PK, changing boot policy requires your"
-echo "  PK private key. set a firmware administrator password to prevent"
-echo "  physical access from bypassing this (done in firmware UI)."
-echo ""
-echo "  security: private keys are stored on the storage partition alongside"
-echo "  VM images. consider moving them offline after successful enrollment."
-echo ""
-
-SECURE_BOOT=false
-SETUP_MODE=false
-if [ -z "$DONE_STEP_SECURE_BOOT_CONFIG" ]; then
-    if ask_yn "enable secure boot?"; then
-        SECURE_BOOT=true
-        # sbsigntools is the correct Alpine package name (not sbsigntool)
-        apk add --quiet sbsigntools \
-            || die "cannot install sbsigntools — is the community repo enabled?"
-
-        SETUP_VAR="/sys/firmware/efi/efivars/SetupMode-8be4df61-93ca-11d2-aa0d-00e098032b8c"
-        if [ -f "$SETUP_VAR" ]; then
-            # skip 4-byte EFI attribute header; read 1 byte as exactly 2 hex chars
-            SM_BYTE=$(hexdump -n 1 -s 4 -e '1/1 "%02x"' "$SETUP_VAR" 2>/dev/null || echo "00")
-            [ "$SM_BYTE" = "01" ] && SETUP_MODE=true
-        fi
-
-        if [ "$SETUP_MODE" = "true" ]; then
-            echo "quay: firmware is in setup mode — keys will be enrolled automatically"
-        else
-            echo "quay: firmware is not in setup mode — enrollment will be deferred"
-        fi
-    fi
-    save_var SECURE_BOOT "$SECURE_BOOT"
-    save_var SETUP_MODE  "$SETUP_MODE"
-    mark_step SECURE_BOOT_CONFIG
-fi
-
-# ── identity ──────────────────────────────────────────────────────────────────
-
-if [ -z "$DONE_STEP_IDENTITY" ]; then
-    echo ""
-    printf "hostname: "
-    read -r NEW_HOSTNAME
-    [ -n "$NEW_HOSTNAME" ] || die "hostname cannot be empty"
-    echo "$NEW_HOSTNAME" > /etc/hostname
-    hostname "$NEW_HOSTNAME"
-
-    echo "root password:"
-    passwd root
-
-    echo ""
-    echo "ssh public key"
-    echo "paste an authorized_keys line, or press enter to generate a keypair:"
-    read -r PUBKEY
-    mkdir -p /root/.ssh
-    chmod 700 /root/.ssh
-
-    if [ -z "$PUBKEY" ]; then
-        ssh-keygen -t ed25519 -f /tmp/quay_bootstrap -N "" -q
-        cp /tmp/quay_bootstrap.pub /root/.ssh/authorized_keys
-        echo ""
-        echo "private key — save this now, it will not be shown again:"
-        echo "─────────────────────────────────────────────────────────"
-        cat /tmp/quay_bootstrap
-        echo "─────────────────────────────────────────────────────────"
-        echo ""
-        echo "clear your terminal scrollback after copying this key."
-        echo ""
-        rm -f /tmp/quay_bootstrap /tmp/quay_bootstrap.pub
-    else
-        echo "$PUBKEY" > /root/.ssh/authorized_keys
-    fi
-    chmod 600 /root/.ssh/authorized_keys
-
-    # vmrunner: restricted account for QEMU processes
-    # NOT in disk group — QEMU opens image files as root before -runas drops privs
-    getent passwd vmrunner >/dev/null 2>&1 || adduser -S -D -H -s /sbin/nologin vmrunner
-    addgroup vmrunner kvm 2>/dev/null || true
-
-    chsh -s /bin/zsh root 2>/dev/null || usermod -s /bin/zsh root 2>/dev/null || true
-
-    save_var NEW_HOSTNAME "$NEW_HOSTNAME"
-    mark_step IDENTITY
-fi
-
-# ── secure boot key chain ─────────────────────────────────────────────────────
-# MUST run before FORGE_UKI so forge-uki uses the chain-derived db.key,
-# not a self-signed orphan cert it generates on its own.
-
-if [ "$SECURE_BOOT" = "true" ] && [ -z "$DONE_STEP_KEY_CHAIN" ]; then
-    echo "quay: generating PK/KEK/db certificate chain"
-    GUID=$(uuidgen)
-    mkdir -p "$SB_DIR"
-    chmod 700 "$SB_DIR"
-
-    # PK — top-level platform key
-    openssl req -newkey rsa:4096 -nodes -keyout "$SB_DIR/PK.key" \
-        -new -x509 -sha256 -days 3650 -subj "/CN=quay PK/" \
-        -out "$SB_DIR/PK.crt" >/dev/null 2>&1 || die "PK generation failed"
-
-    # KEK — key exchange key, signed by PK
-    openssl req -newkey rsa:4096 -nodes -keyout "$SB_DIR/KEK.key" \
-        -new -sha256 -subj "/CN=quay KEK/" \
-        -out "$SB_DIR/KEK.csr" >/dev/null 2>&1 || die "KEK CSR failed"
-    openssl x509 -req -in "$SB_DIR/KEK.csr" \
-        -CA "$SB_DIR/PK.crt" -CAkey "$SB_DIR/PK.key" -CAcreateserial \
-        -out "$SB_DIR/KEK.crt" -days 3650 -sha256 >/dev/null 2>&1 || die "KEK signing failed"
-
-    # db — self-signed leaf cert for UKI signing
-    openssl req -newkey rsa:4096 -nodes -keyout "$SB_DIR/db.key" \
-        -new -x509 -sha256 -days 3650 -subj "/CN=quay db/" \
-        -out "$SB_DIR/db.crt" >/dev/null 2>&1 || die "db key generation failed"
-
-    chmod 600 "$SB_DIR"/*.key
-    rm -f "$SB_DIR/KEK.csr" "$SB_DIR/PK.srl"
-
-    cert-to-efi-sig-list -g "$GUID" "$SB_DIR/PK.crt"  "$SB_DIR/PK.esl"
-    cert-to-efi-sig-list -g "$GUID" "$SB_DIR/KEK.crt" "$SB_DIR/KEK.esl"
-    cert-to-efi-sig-list -g "$GUID" "$SB_DIR/db.crt"  "$SB_DIR/db.esl"
-
-    sign-efi-sig-list -k "$SB_DIR/PK.key"  -c "$SB_DIR/PK.crt"  PK  "$SB_DIR/PK.esl"  "$SB_DIR/PK.auth"
-    sign-efi-sig-list -k "$SB_DIR/PK.key"  -c "$SB_DIR/PK.crt"  KEK "$SB_DIR/KEK.esl" "$SB_DIR/KEK.auth"
-    sign-efi-sig-list -k "$SB_DIR/KEK.key" -c "$SB_DIR/KEK.crt" db  "$SB_DIR/db.esl"  "$SB_DIR/db.auth"
-
-    echo "quay: key chain ready at $SB_DIR"
-    mark_step KEY_CHAIN
-fi
-
-# ── forge UKI ─────────────────────────────────────────────────────────────────
-
-if [ -z "$DONE_STEP_FORGE_UKI" ]; then
-    ESTIMATED_SIZE=125829120
-    SLIM_MODE=""
-    _check_part="${BOOT_PART:-$EFI_PART}"
-    if ! check_part_space "$_check_part" "$ESTIMATED_SIZE"; then
-        echo "quay: low space on $_check_part — using slim UKI (xz compression)"
-        SLIM_MODE="--slim"
-    fi
-    # shellcheck disable=SC2086
-    if [ "$SECURE_BOOT" = "true" ]; then
-        sh "$QUAY_DIR/forge-uki.sh" "$STORAGE_UUID" "$VFIO_IDS" "$ISO_CORES" "$HUGEPAGE_COUNT" $SLIM_MODE --sign
-    else
-        sh "$QUAY_DIR/forge-uki.sh" "$STORAGE_UUID" "$VFIO_IDS" "$ISO_CORES" "$HUGEPAGE_COUNT" $SLIM_MODE
-    fi
-    mark_step FORGE_UKI
-fi
-
-# ── secure boot enrollment ────────────────────────────────────────────────────
-
-if [ "$SECURE_BOOT" = "true" ] && [ -z "$DONE_STEP_ENROLL" ]; then
-    if [ "$SETUP_MODE" = "true" ]; then
-        echo "quay: enrolling keys (db -> KEK -> PK)"
-        efi-updatevar -e -f "$SB_DIR/db.auth"  db  || die "db enrollment failed"
-        efi-updatevar -e -f "$SB_DIR/KEK.auth" KEK || die "KEK enrollment failed"
-        efi-updatevar    -f "$SB_DIR/PK.auth"  PK  || die "PK enrollment failed"
-        echo "quay: keys enrolled; firmware is now in user mode"
-    else
-        echo ""
-        echo "deferred enrollment — .auth files at $SB_DIR"
-        echo "copy db.auth, KEK.auth, PK.auth to a FAT32 drive and enroll"
-        echo "via your firmware's 'enroll from file' option, in that order."
-        echo ""
-        printf "  FS0:\\\\EFI\\\\Quay\\\\enroll-sb.nsh\n"
-        echo ""
-        mkdir -p /mnt/target_boot
-        guarded_mount "${BOOT_PART:-$EFI_PART}" /mnt/target_boot
-        mkdir -p /mnt/target_boot/EFI/Quay
-        cp "$SB_DIR/db.auth"  /mnt/target_boot/EFI/Quay/db.auth
-        cp "$SB_DIR/KEK.auth" /mnt/target_boot/EFI/Quay/KEK.auth
-        cp "$SB_DIR/PK.auth"  /mnt/target_boot/EFI/Quay/PK.auth
-        cat > /mnt/target_boot/EFI/Quay/enroll-sb.nsh << 'EFIEOF'
-@echo -off
-echo enrolling quay secure boot keys...
-SetVar db  -nv -rt -bs -at -append -f db.auth
-SetVar KEK -nv -rt -bs -at -append -f KEK.auth
-SetVar PK  -nv -rt -bs -at          -f PK.auth
-echo done. reboot to activate.
-EFIEOF
-        umount /mnt/target_boot
-    fi
-    mark_step ENROLL
-fi
-
-# ── deploy ────────────────────────────────────────────────────────────────────
-
-if [ -z "$DONE_STEP_DEPLOY" ]; then
-    echo "quay: deploying"
-    _target_part="${BOOT_PART:-$EFI_PART}"
-    mkdir -p /mnt/target_boot
-    guarded_mount "$_target_part" /mnt/target_boot
-    mkdir -p /mnt/target_boot/EFI/Linux
-    cp /tmp/quay.efi /mnt/target_boot/EFI/Linux/quay.efi
-
-    _kname=$(basename "$(readlink -f "$_target_part")")
-    _sysp="/sys/class/block/$_kname"
-    [ -f "$_sysp/partition" ] || die "cannot read partition info for $_target_part from sysfs"
-    _partnum=$(cat "$_sysp/partition")
-    _parent=$(basename "$(readlink -f "$_sysp/..")")
-    _disk="/dev/$_parent"
-    [ -b "$_disk" ] || die "parent disk $_disk is not a block device"
-
-    # remove stale Quay entries by exact label
-    efibootmgr | awk '/\sQuay$/ {
-        id=$1; sub(/^Boot/,"",id); sub(/\*.*/,"",id); print id
-    }' | while read -r id; do
-        [ -n "$id" ] && efibootmgr -b "$id" -B >/dev/null 2>&1 || true
-    done
-
-    efibootmgr -c -L "Quay" \
-        -d "$_disk" -p "$_partnum" \
-        -l "\\EFI\\Linux\\quay.efi" >/dev/null || die "efibootmgr failed"
-
-    # recovery UKI: no VFIO, no isolcpus
-    # signed if SB is active — unsigned recovery rejected by firmware in user mode
-    echo "quay: building recovery UKI"
-    if [ "$SECURE_BOOT" = "true" ]; then
-        sh "$QUAY_DIR/forge-uki.sh" "$STORAGE_UUID" "" "" "" --sign
-    else
-        sh "$QUAY_DIR/forge-uki.sh" "$STORAGE_UUID" "" "" ""
-    fi
-    cp /tmp/quay.efi /mnt/target_boot/EFI/Linux/quay-recovery.efi
-
-    efibootmgr -c -L "Quay (recovery)" \
-        -d "$_disk" -p "$_partnum" \
-        -l "\\EFI\\Linux\\quay-recovery.efi" >/dev/null || true
-
-    # quay first in boot order
-    _quay_num=$(efibootmgr | awk '/Boot[0-9A-Fa-f]{4}\* Quay$/ {
-        gsub(/Boot/,""); gsub(/\*.*/,""); print; exit
-    }')
-    if [ -n "$_quay_num" ]; then
-        _cur=$(efibootmgr | awk '/^BootOrder:/{print $2}')
-        _filtered=$(echo "$_cur" | tr ',' '\n' \
-            | grep -iv "^${_quay_num}$" | tr '\n' ',' | sed 's/,$//')
-        if [ -n "$_filtered" ]; then
-            efibootmgr -o "${_quay_num},${_filtered}" >/dev/null
-        else
-            efibootmgr -o "${_quay_num}" >/dev/null
-        fi
-        echo "quay: boot order updated; quay is first"
-    fi
-
-    umount /mnt/target_boot
-    rmdir  /mnt/target_boot 2>/dev/null || true
-    mark_step DEPLOY
-fi
-
-# ── network + ssh ─────────────────────────────────────────────────────────────
-
-if [ -z "$DONE_STEP_CONFIG" ]; then
-    # detect first physical (non-loopback, has /device sysfs link) interface
-    PRIMARY_NIC=""
-    for _iface in /sys/class/net/*; do
-        _name=$(basename "$_iface")
-        [ "$_name" = "lo" ] && continue
-        [ -e "$_iface/device" ] || continue
-        PRIMARY_NIC="$_name"
-        break
-    done
-    if [ -z "$PRIMARY_NIC" ]; then
-        for _iface in /sys/class/net/*; do
-            _name=$(basename "$_iface")
-            [ "$_name" != "lo" ] && PRIMARY_NIC="$_name" && break
-        done
-    fi
-    [ -n "$PRIMARY_NIC" ] || die "cannot detect a primary network interface"
-    save_var PRIMARY_NIC "$PRIMARY_NIC"
-
-    # template uses {{NIC}} and {{BRIDGE}} placeholders
-    sed -e "s/{{NIC}}/$PRIMARY_NIC/g" \
-        -e "s/{{BRIDGE}}/$BRIDGE_NAME/g" \
-        "$QUAY_DIR/templates/interfaces.tpl" > /etc/network/interfaces
-
-    mkdir -p /etc/qemu
-    echo "allow $BRIDGE_NAME" > /etc/qemu/bridge.conf
-    chmod 644 /etc/qemu/bridge.conf
-
-    cp "$QUAY_DIR/templates/sshd_config.tpl" /etc/ssh/sshd_config
-    ssh-keygen -A >/dev/null 2>&1
-
-    # nftables template uses {{BRIDGE}} placeholder
-    sed "s/{{BRIDGE}}/$BRIDGE_NAME/g" \
-        "$QUAY_DIR/templates/nftables.tpl" > /etc/nftables.nft
-
-    rc-update add nftables   default >/dev/null 2>&1 || true
-    rc-update add sshd       default >/dev/null 2>&1 || true
-    rc-update add networking boot    >/dev/null 2>&1 || true
-
-    # ── initramfs ─────────────────────────────────────────────────────────────
-    # vfio is NOT a built-in mkinitfs feature token. It requires a .modules
-    # file in features.d/ that lists the kernel module paths explicitly.
-    # Unknown tokens in features="" are silently ignored by mkinitfs —
-    # vfio_pci, kvm_amd, usb-storage, bridge, tun are not valid feature names.
-    # vfio must appear before any kms or gpu feature token to win bind race.
-    mkdir -p /etc/mkinitfs/features.d
-    cat > /etc/mkinitfs/features.d/vfio.modules << 'EOF'
-kernel/drivers/vfio/vfio.ko.*
-kernel/drivers/vfio/vfio_virqfd.ko.*
-kernel/drivers/vfio/vfio_iommu_type1.ko.*
-kernel/drivers/vfio/pci/vfio-pci.ko.*
-EOF
-    cat > /etc/mkinitfs/mkinitfs.conf << 'EOF'
-features="vfio kvm base scsi ahci nvme usb-storage ext4"
-EOF
-    mkinitfs >/dev/null 2>&1 || true
-
-    # ── persistence ───────────────────────────────────────────────────────────
-    mkdir -p /etc/lbu
-    cat > /etc/lbu/lbu.conf << EOF
-# LBU_BACKUPDIR must point to the mounted storage partition.
-# Setting it to / (tmpfs root) causes lbu commit to silently discard changes.
-LBU_BACKUPDIR=/mnt/storage
-EOF
-
-    if ! grep -q "$STORAGE_UUID" /etc/fstab 2>/dev/null; then
-        echo "UUID=$STORAGE_UUID  /mnt/storage  ext4  defaults,noatime  0  2" >> /etc/fstab
-    fi
-    mkdir -p /mnt/storage
-    guarded_mount "$STORAGE_PART" /mnt/storage
-
-    for ml in /lib/modloop-*; do
-        [ -f "$ml" ] && cp "$ml" /mnt/storage/modloop-lts && break
-    done
-
-    rm -rf /var/cache/apk
-    mkdir -p /mnt/storage/cache
-    ln -sf /mnt/storage/cache /var/cache/apk
-    apk cache download >/dev/null 2>&1 || true
-
-    mkdir -p /mnt/storage/vms /mnt/storage/isos /mnt/storage/logs
-
-    for f in \
-        /etc/network/interfaces \
-        /etc/ssh/sshd_config \
-        /etc/ssh/ssh_host_ed25519_key \
-        /etc/ssh/ssh_host_ed25519_key.pub \
-        /etc/hostname \
-        /etc/shadow \
-        /etc/passwd \
-        /etc/group \
-        /etc/lbu/lbu.conf \
-        /etc/fstab \
-        /etc/apk/repositories \
-        /root/.ssh/authorized_keys \
-        /etc/nftables.nft \
-        /etc/mkinitfs/mkinitfs.conf \
-        /etc/mkinitfs/features.d/vfio.modules \
-        /etc/qemu/bridge.conf; do
-        lbu include "$f" >/dev/null 2>&1 || true
-    done
-
-    # -d removes old overlay backups; positional arg is destination directory
-    lbu commit -d /mnt/storage >/dev/null 2>&1 \
-        || lbu pkg "/mnt/storage/${NEW_HOSTNAME}.apkovl.tar.gz" >/dev/null 2>&1
-
-    umount /mnt/storage
-    mark_step CONFIG
-    mark_step FINISHED
-fi
-
-# ── done ──────────────────────────────────────────────────────────────────────
-
-SECBOOT_STATUS="unsigned"
-[ "$SECURE_BOOT" = "true" ] && SECBOOT_STATUS="signed"
-
-echo ""
-echo "quay: installed"
-echo ""
-echo "  uki      /EFI/Linux/quay.efi"
-echo "  secboot  $SECBOOT_STATUS"
-echo "  nic      ${PRIMARY_NIC} -> ${BRIDGE_NAME}"
-echo "  storage  $STORAGE_PART ($STORAGE_UUID)"
-echo "  repos    ${REPO_BRANCH}/main + community"
-echo ""
-echo "reboot, then:"
-echo "  ssh root@<ip>"
-echo "  lbu commit   # to persist future changes"
-echo ""
+282: echo "  giving you sole control over what the firmware will execute."
+283: echo ""
+284: echo "  for automatic key enrollment, your firmware must be in setup mode:"
+285: echo "  look for 'reset secure boot keys' or 'clear secure boot keys' under"
+286: echo "  the security tab in your firmware UI. exact wording varies by vendor."
+287: echo ""
+288: echo "  if not in setup mode, keys are generated and the UKI is signed, but"
+289: echo "  enrollment must be done manually from the firmware UI after install."
+290: echo ""
+291: echo "  note: once quay controls the PK, changing boot policy requires your"
+292: echo "  PK private key. set a firmware administrator password to prevent"
+293: echo "  physical access from bypassing this (done in firmware UI)."
+294: echo ""
+295: echo "  security: private keys are stored on the storage partition alongside"
+296: echo "  VM images. consider moving them offline after successful enrollment."
+297: echo ""
+298: 
+299: SECURE_BOOT=false
+300: SETUP_MODE=false
+301: if [ -z "$DONE_STEP_SECURE_BOOT_CONFIG" ]; then
+302:     if ask_yn "enable secure boot?"; then
+303:         SECURE_BOOT=true
+304:         # sbsigntools is the correct Alpine package name (not sbsigntool)
+305:         apk add --quiet sbsigntools \
+3306:             || die "cannot install sbsigntools — is the community repo enabled?"
+307: 
+308:         SETUP_VAR="/sys/firmware/efi/efivars/SetupMode-8be4df61-93ca-11d2-aa0d-00e098032b8c"
+309:         if [ -f "$SETUP_VAR" ]; then
+310:             # skip 4-byte EFI attribute header; read 1 byte as exactly 2 hex chars
+311:             SM_BYTE=$(hexdump -n 1 -s 4 -e '1/1 "%02x"' "$SETUP_VAR" 2>/dev/null || echo "00")
+312:             [ "$SM_BYTE" = "01" ] && SETUP_MODE=true
+313:         fi
+314: 
+315:         if [ "$SETUP_MODE" = "true" ]; then
+316:             echo "quay: firmware is in setup mode — keys will be enrolled automatically"
+317:         else
+318:             echo "quay: firmware is not in setup mode — enrollment will be deferred"
+319:         fi
+320:     fi
+321:     save_var SECURE_BOOT "$SECURE_BOOT"
+322:     save_var SETUP_MODE  "$SETUP_MODE"
+323:     mark_step SECURE_BOOT_CONFIG
+324: fi
+325: 
+326: # ── identity ──────────────────────────────────────────────────────────────────
+327: 
+328: if [ -z "$DONE_STEP_IDENTITY" ]; then
+329:     echo ""
+330:     printf "hostname: "
+331:     read -r NEW_HOSTNAME
+332:     [ -n "$NEW_HOSTNAME" ] || die "hostname cannot be empty"
+333:     echo "$NEW_HOSTNAME" > /etc/hostname
+334:     hostname "$NEW_HOSTNAME"
+335: 
+336:     echo "root password:"
+337:     passwd root
+338: 
+339:     echo ""
+340:     echo "ssh public key"
+341:     echo "paste an authorized_keys line, or press enter to generate a keypair:"
+342:     read -r PUBKEY
+343:     mkdir -p /root/.ssh
+344:     chmod 700 /root/.ssh
+345: 
+346:     if [ -z "$PUBKEY" ]; then
+347:         ssh-keygen -t ed25519 -f /tmp/quay_bootstrap -N "" -q
+348:         cp /tmp/quay_bootstrap.pub /root/.ssh/authorized_keys
+349:         echo ""
+350:         echo "private key — save this now, it will not be shown again:"
+351:         echo "─────────────────────────────────────────────────────────"
+352:         cat /tmp/quay_bootstrap
+353:         echo "─────────────────────────────────────────────────────────"
+354:         echo ""
+355:         echo "clear your terminal scrollback after copying this key."
+356:         echo ""
+357:         rm -f /tmp/quay_bootstrap /tmp/quay_bootstrap.pub
+358:     else
+359:         echo "$PUBKEY" > /root/.ssh/authorized_keys
+360:     fi
+361:     chmod 600 /root/.ssh/authorized_keys
+362: 
+363:     # vmrunner: restricted account for QEMU processes
+364:     # NOT in disk group — QEMU opens image files as root before -runas drops privs
+365:     getent passwd vmrunner >/dev/null 2>&1 || adduser -S -D -H -s /sbin/nologin vmrunner
+366:     addgroup vmrunner kvm 2>/dev/null || true
+367: 
+368:     chsh -s /bin/zsh root 2>/dev/null || usermod -s /bin/zsh root 2>/dev/null || true
+369: 
+370:     save_var NEW_HOSTNAME "$NEW_HOSTNAME"
+371:     mark_step IDENTITY
+372: fi
+373: 
+374: # ── secure boot key chain ─────────────────────────────────────────────────────
+375: # MUST run before FORGE_UKI so forge-uki uses the chain-derived db.key,
+376: # not a self-signed orphan cert it generates on its own.
+377: 
+378: if [ "$SECURE_BOOT" = "true" ] && [ -z "$DONE_STEP_KEY_CHAIN" ]; then
+379:     echo "quay: generating PK/KEK/db certificate chain"
+380:     GUID=$(uuidgen)
+381:     mkdir -p "$SB_DIR"
+382:     chmod 700 "$SB_DIR"
+383: 
+384:     # PK — top-level platform key
+385:     openssl req -newkey rsa:4096 -nodes -keyout "$SB_DIR/PK.key" \
+386:         -new -x509 -sha256 -days 3650 -subj "/CN=quay PK/" \
+387:         -out "$SB_DIR/PK.crt" >/dev/null 2>&1 || die "PK generation failed"
+388: 
+389:     # KEK — key exchange key, signed by PK
+390:     openssl req -newkey rsa:4096 -nodes -keyout "$SB_DIR/KEK.key" \
+391:         -new -sha256 -subj "/CN=quay KEK/" \
+392:         -out "$SB_DIR/KEK.csr" >/dev/null 2>&1 || die "KEK CSR failed"
+393:     openssl x509 -req -in "$SB_DIR/KEK.csr" \
+394:         -CA "$SB_DIR/PK.crt" -CAkey "$SB_DIR/PK.key" -CAcreateserial \
+395:         -out "$SB_DIR/KEK.crt" -days 3650 -sha256 >/dev/null 2>&1 || die "KEK signing failed"
+396: 
+397:     # db — self-signed leaf cert for UKI signing
+398:     openssl req -newkey rsa:4096 -nodes -keyout "$SB_DIR/db.key" \
+399:         -new -x509 -sha256 -days 3650 -subj "/CN=quay db/" \
+400:         -out "$SB_DIR/db.crt" >/dev/null 2>&1 || die "db key generation failed"
+401: 
+402:     chmod 600 "$SB_DIR"/*.key
+403:     rm -f "$SB_DIR/KEK.csr" "$SB_DIR/PK.srl"
+404: 
+405:     cert-to-efi-sig-list -g "$GUID" "$SB_DIR/PK.crt"  "$SB_DIR/PK.esl"
+406:     cert-to-efi-sig-list -g "$GUID" "$SB_DIR/KEK.crt" "$SB_DIR/KEK.esl"
+407:     cert-to-efi-sig-list -g "$GUID" "$SB_DIR/db.crt"  "$SB_DIR/db.esl"
+408: 
+409:     sign-efi-sig-list -k "$SB_DIR/PK.key"  -c "$SB_DIR/PK.crt"  PK  "$SB_DIR/PK.esl"  "$SB_DIR/PK.auth"
+410:     sign-efi-sig-list -k "$SB_DIR/PK.key"  -c "$SB_DIR/PK.crt"  KEK "$SB_DIR/KEK.esl" "$SB_DIR/KEK.auth"
+411:     sign-efi-sig-list -k "$SB_DIR/KEK.key" -c "$SB_DIR/KEK.crt" db  "$SB_DIR/db.esl"  "$SB_DIR/db.auth"
+412: 
+413:     echo "quay: key chain ready at $SB_DIR"
+414:     mark_step KEY_CHAIN
+415: fi
+416: 
+417: # ── forge UKI ─────────────────────────────────────────────────────────────────
+418: 
+419: if [ -z "$DONE_STEP_FORGE_UKI" ]; then
+420:     ESTIMATED_SIZE=125829120
+421:     SLIM_MODE=""
+422:     _check_part="${BOOT_PART:-$EFI_PART}"
+423:     if ! check_part_space "$_check_part" "$ESTIMATED_SIZE"; then
+424:         echo "quay: low space on $_check_part — using slim UKI (xz compression)"
+425:         SLIM_MODE="--slim"
+426:     fi
+427:     # shellcheck disable=SC2086
+428:     if [ "$SECURE_BOOT" = "true" ]; then
+429:         sh "$QUAY_DIR/forge-uki.sh" "$STORAGE_UUID" "$VFIO_IDS" "$ISO_CORES" "$HUGEPAGE_COUNT" $SLIM_MODE --sign
+430:     else
+431:         sh "$QUAY_DIR/forge-uki.sh" "$STORAGE_UUID" "$VFIO_IDS" "$ISO_CORES" "$HUGEPAGE_COUNT" $SLIM_MODE
+432:     fi
+433:     mark_step FORGE_UKI
+434: fi
+435: 
+436: # ── secure boot enrollment ────────────────────────────────────────────────────
+437: 
+438: if [ "$SECURE_BOOT" = "true" ] && [ -z "$DONE_STEP_ENROLL" ]; then
+439:     if [ "$SETUP_MODE" = "true" ]; then
+440:         echo "quay: enrolling keys (db -> KEK -> PK)"
+441:         efi-updatevar -e -f "$SB_DIR/db.auth"  db  || die "db enrollment failed"
+442:         efi-updatevar -e -f "$SB_DIR/KEK.auth" KEK || die "KEK enrollment failed"
+443:         efi-updatevar    -f "$SB_DIR/PK.auth"  PK  || die "PK enrollment failed"
+444:         echo "quay: keys enrolled; firmware is now in user mode"
+445:     else
+446:         echo ""
+447:         echo "deferred enrollment — .auth files at $SB_DIR"
+448:         echo "copy db.auth, KEK.auth, PK.auth to a FAT32 drive and enroll"
+449:         echo "via your firmware's 'enroll from file' option, in that order."
+450:         echo ""
+451:         printf "  FS0:\\\\EFI\\\\Quay\\\\enroll-sb.nsh\n"
+452:         echo ""
+453:         mkdir -p /mnt/target_boot
+454:         guarded_mount "${BOOT_PART:-$EFI_PART}" /mnt/target_boot
+455:         mkdir -p /mnt/target_boot/EFI/Quay
+456:         cp "$SB_DIR/db.auth"  /mnt/target_boot/EFI/Quay/db.auth
+457:         cp "$SB_DIR/KEK.auth" /mnt/target_boot/EFI/Quay/KEK.auth
+458:         cp "$SB_DIR/PK.auth"  /mnt/target_boot/EFI/Quay/PK.auth
+459:         cat > /mnt/target_boot/EFI/Quay/enroll-sb.nsh << 'EFIEOF'
+460: @echo -off
+461: echo enrolling quay secure boot keys...
+462: SetVar db  -nv -rt -bs -at -append -f db.auth
+463: SetVar KEK -nv -rt -bs -at -append -f KEK.auth
+464: SetVar PK  -nv -rt -bs -at          -f PK.auth
+465: echo done. reboot to activate.
+466: EFIEOF
+467:         umount /mnt/target_boot
+468:     fi
+469:     mark_step ENROLL
+470: fi
+471: 
+472: # ── deploy ────────────────────────────────────────────────────────────────────
+473: 
+474: if [ -z "$DONE_STEP_DEPLOY" ]; then
+475:     echo "quay: deploying"
+476:     _target_part="${BOOT_PART:-$EFI_PART}"
+477:     mkdir -p /mnt/target_boot
+478:     guarded_mount "$_target_part" /mnt/target_boot
+479:     mkdir -p /mnt/target_boot/EFI/Linux
+480:     cp /tmp/quay.efi /mnt/target_boot/EFI/Linux/quay.efi
+481: 
+482:     _kname=$(basename "$(readlink -f "$_target_part")")
+483:     _sysp="/sys/class/block/$_kname"
+484:     [ -f "$_sysp/partition" ] || die "cannot read partition info for $_target_part from sysfs"
+485:     _partnum=$(cat "$_sysp/partition")
+486:     _parent=$(basename "$(readlink -f "$_sysp/..")")
+487:     _disk="/dev/$_parent"
+488:     [ -b "$_disk" ] || die "parent disk $_disk is not a block device"
+489: 
+490:     # remove stale Quay entries by exact label
+491:     efibootmgr | awk '/\sQuay$/ {
+492:         id=$1; sub(/^Boot/,"",id); sub(/\*.*/,"",id); print id
+493:     }' | while read -r id; do
+494:         [ -n "$id" ] && efibootmgr -b "$id" -B >/dev/null 2>&1 || true
+495:     done
+496: 
+497:     efibootmgr -c -L "Quay" \
+498:         -d "$_disk" -p "$_partnum" \
+499:         -l "\\EFI\\Linux\\quay.efi" >/dev/null || die "efibootmgr failed"
+500: 
+501:     # recovery UKI: no VFIO, no isolcpus
+502:     # signed if SB is active — unsigned recovery rejected by firmware in user mode
+503:     echo "quay: building recovery UKI"
+504:     if [ "$SECURE_BOOT" = "true" ]; then
+505:         sh "$QUAY_DIR/forge-uki.sh" "$STORAGE_UUID" "" "" "" --sign
+506:     else
+507:         sh "$QUAY_DIR/forge-uki.sh" "$STORAGE_UUID" "" "" ""
+508:     fi
+509:     cp /tmp/quay.efi /mnt/target_boot/EFI/Linux/quay-recovery.efi
+510: 
+511:     efibootmgr -c -L "Quay (recovery)" \
+512:         -d "$_disk" -p "$_partnum" \
+513:         -l "\\EFI\\Linux\\quay-recovery.efi" >/dev/null || true
+514: 
+515:     # quay first in boot order
+516:     _quay_num=$(efibootmgr | awk '/Boot[0-9A-Fa-f]{4}\* Quay$/ {
+517:         gsub(/Boot/,""); gsub(/\*.*/,""); print; exit
+518:     }')
+519:     if [ -n "$_quay_num" ]; then
+520:         _cur=$(efibootmgr | awk '/^BootOrder:/{print $2}')
+521:         _filtered=$(echo "$_cur" | tr ',' '\n' \
+522:             | grep -iv "^${_quay_num}$" | tr '\n' ',' | sed 's/,$//')
+523:         if [ -n "$_filtered" ]; then
+524:             efibootmgr -o "${_quay_num},${_filtered}" >/dev/null
+525:         else
+526:             efibootmgr -o "${_quay_num}" >/dev/null
+527:         fi
+528:         echo "quay: boot order updated; quay is first"
+529:     fi
+530: 
+531:     umount /mnt/target_boot
+532:     rmdir  /mnt/target_boot 2>/dev/null || true
+533:     mark_step DEPLOY
+534: fi
+535: 
+536: # ── network + ssh ─────────────────────────────────────────────────────────────
+537: 
+538: if [ -z "$DONE_STEP_CONFIG" ]; then
+539:     # detect first physical (non-loopback, has /device sysfs link) interface
+540:     PRIMARY_NIC=""
+541:     for _iface in /sys/class/net/*; do
+542:         _name=$(basename "$_iface")
+543:         [ "$_name" = "lo" ] && continue
+544:         [ -e "$_iface/device" ] || continue
+545:         PRIMARY_NIC="$_name"
+546:         break
+547:     done
+548:     if [ -z "$PRIMARY_NIC" ]; then
+549:         for _iface in /sys/class/net/*; do
+550:             _name=$(basename "$_iface")
+551:             [ "$_name" != "lo" ] && PRIMARY_NIC="$_name" && break
+552:         done
+553:     fi
+554:     [ -n "$PRIMARY_NIC" ] || die "cannot detect a primary network interface"
+555:     save_var PRIMARY_NIC "$PRIMARY_NIC"
+556: 
+557:     # template uses {{NIC}} and {{BRIDGE}} placeholders
+558:     sed -e "s/{{NIC}}/$PRIMARY_NIC/g" \
+559:         -e "s/{{BRIDGE}}/$BRIDGE_NAME/g" \
+560:         "$QUAY_DIR/templates/interfaces.tpl" > /etc/network/interfaces
+561: 
+562:     mkdir -p /etc/qemu
+563:     echo "allow $BRIDGE_NAME" > /etc/qemu/bridge.conf
+564:     chmod 644 /etc/qemu/bridge.conf
+565: 
+566:     cp "$QUAY_DIR/templates/sshd_config.tpl" /etc/ssh/sshd_config
+567:     ssh-keygen -A >/dev/null 2>&1
+568: 
+569:     # nftables template uses {{BRIDGE}} placeholder
+570:     sed "s/{{BRIDGE}}/$BRIDGE_NAME/g" \
+571:         "$QUAY_DIR/templates/nftables.tpl" > /etc/nftables.nft
+572: 
+573:     rc-update add nftables   default >/dev/null 2>&1 || true
+574:     rc-update add sshd       default >/dev/null 2>&1 || true
+575:     rc-update add networking boot    >/dev/null 2>&1 || true
+576: 
+577:     # ── initramfs ─────────────────────────────────────────────────────────────
+578:     # vfio is NOT a built-in mkinitfs feature token. It requires a .modules
+579:     # file in features.d/ that lists the kernel module paths explicitly.
+580:     # Unknown tokens in features="" are silently ignored by mkinitfs —
+581:     # vfio_pci, kvm_amd, usb-storage, bridge, tun are not valid feature names.
+582:     # vfio must appear before any kms or gpu feature token to win bind race.
+583:     mkdir -p /etc/mkinitfs/features.d
+584:     cat > /etc/mkinitfs/features.d/vfio.modules << 'EOF'
+585: kernel/drivers/vfio/vfio.ko.*
+586: kernel/drivers/vfio/vfio_virqfd.ko.*
+587: kernel/drivers/vfio/vfio_iommu_type1.ko.*
+588: kernel/drivers/vfio/pci/vfio-pci.ko.*
+589: EOF
+590:     cat > /etc/mkinitfs/mkinitfs.conf << 'EOF'
+591: features="vfio kvm base scsi ahci nvme usb-storage ext4"
+592: EOF
+593:     mkinitfs >/dev/null 2>&1 || true
+594: 
+595:     # ── persistence ───────────────────────────────────────────────────────────
+596:     mkdir -p /etc/lbu
+597:     cat > /etc/lbu/lbu.conf << EOF
+598: # LBU_BACKUPDIR must point to the mounted storage partition.
+599: # Setting it to / (tmpfs root) causes lbu commit to silently discard changes.
+600: LBU_BACKUPDIR=/mnt/storage
+601: EOF
+602: 
+603:     if ! grep -q "$STORAGE_UUID" /etc/fstab 2>/dev/null; then
+604:         echo "UUID=$STORAGE_UUID  /mnt/storage  ext4  defaults,noatime  0  2" >> /etc/fstab
+605:     fi
+606:     mkdir -p /mnt/storage
+607:     guarded_mount "$STORAGE_PART" /mnt/storage
+608: 
+609:     for ml in /lib/modloop-*; do
+610:         [ -f "$ml" ] && cp "$ml" /mnt/storage/modloop-lts && break
+611:     done
+612: 
+613:     rm -rf /var/cache/apk
+614:     mkdir -p /mnt/storage/cache
+615:     ln -sf /mnt/storage/cache /var/cache/apk
+616:     apk cache download >/dev/null 2>&1 || true
+617: 
+618:     mkdir -p /mnt/storage/vms /mnt/storage/isos /mnt/storage/logs
+619: 
+620:     for f in \
+621:         /etc/network/interfaces \
+622:         /etc/ssh/sshd_config \
+623:         /etc/ssh/ssh_host_ed25519_key \
+624:         /etc/ssh/ssh_host_ed25519_key.pub \
+625:         /etc/hostname \
+626:         /etc/shadow \
+627:         /etc/passwd \
+628:         /etc/group \
+629:         /etc/lbu/lbu.conf \
+630:         /etc/fstab \
+631:         /etc/apk/repositories \
+632:         /root/.ssh/authorized_keys \
+633:         /etc/nftables.nft \
+634:         /etc/mkinitfs/mkinitfs.conf \
+635:         /etc/mkinitfs/features.d/vfio.modules \
+636:         /etc/qemu/bridge.conf; do
+637:         lbu include "$f" >/dev/null 2>&1 || true
+638:     done
+639: 
+640:     # -d removes old overlay backups; positional arg is destination directory
+641:     lbu commit -d /mnt/storage >/dev/null 2>&1 \
+642:         || lbu pkg "/mnt/storage/${NEW_HOSTNAME}.apkovl.tar.gz" >/dev/null 2>&1
+643: 
+644:     umount /mnt/storage
+645:     mark_step CONFIG
+646:     mark_step FINISHED
+647: fi
+648: 
+649: # ── done ──────────────────────────────────────────────────────────────────────
+650: 
+651: SECBOOT_STATUS="unsigned"
+652: [ "$SECURE_BOOT" = "true" ] && SECBOOT_STATUS="signed"
+653: 
+654: echo ""
+655: echo "quay: installed"
+656: echo ""
+657: echo "  uki      /EFI/Linux/quay.efi"
+658: echo "  secboot  $SECBOOT_STATUS"
+659: echo "  nic      ${PRIMARY_NIC} -> ${BRIDGE_NAME}"
+660: echo "  storage  $STORAGE_PART ($STORAGE_UUID)"
+661: echo "  repos    ${REPO_BRANCH}/main + community"
+662: echo ""
+663: echo "reboot, then:"
+664: echo "  ssh root@<ip>"
+665: echo "  lbu commit   # to persist future changes"
+666: echo ""

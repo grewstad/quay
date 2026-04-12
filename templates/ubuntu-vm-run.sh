@@ -16,10 +16,10 @@ THREADS="${THREADS:-2}"
 BRIDGE="${BRIDGE:-br0}"
 
 # GPU / Display settings
-USE_GPU="${USE_GPU:-0}"
+# Default to 1 (GPU Passthrough) for local physical console users
+USE_GPU="${USE_GPU:-1}"
 GPU_ID="${GPU_ID:-}"
 GPU_AUDIO_ID="${GPU_AUDIO_ID:-}"
-GUI_MODE="${GUI_MODE:-sdl}" # Default to local monitor if not using GPU
 VNC_PORT="${VNC_PORT:-127.0.0.1:0}"
 RUN_AS="${RUN_AS:-vmrunner}"
 
@@ -34,19 +34,19 @@ fi
 
 # build QEMU display/GPU arguments
 if [ "$USE_GPU" = "1" ]; then 
-    [ -n "$GPU_ID" ]       || die "GPU_ID is not set (e.g. GPU_ID=01:00.0)"
-    [ -n "$GPU_AUDIO_ID" ] || die "GPU_AUDIO_ID is not set (e.g. GPU_AUDIO_ID=01:00.1)"
+    [ -n "$GPU_ID" ] || [ -f /tmp/quay_install.state ] && . /tmp/quay_install.state
+    # Auto-detect from state if needed
+    GPU_ID="${GPU_ID:-${VFIO_IDS%%,*}}" 
+    GPU_AUDIO_ID="${GPU_AUDIO_ID:-${VFIO_IDS#*,}}"
+
+    [ -n "$GPU_ID" ] || die "GPU_ID is not set (e.g. USE_GPU=1 GPU_ID=01:00.0)"
     echo "ubuntu-vm-run: GPU passthrough enabled ($GPU_ID)"
-    # When using GPU, we don't need an emulated display, but we want the monitor
     DISPLAY_OPTS="-display none"
-    GPU_OPTS="-device vfio-pci,host=$GPU_ID -device vfio-pci,host=$GPU_AUDIO_ID"
+    GPU_OPTS="-device vfio-pci,host=$GPU_ID"
+    [ -n "$GPU_AUDIO_ID" ] && GPU_OPTS="$GPU_OPTS -device vfio-pci,host=$GPU_AUDIO_ID"
 else
-    echo "ubuntu-vm-run: booting via $GUI_MODE (Local Monitor/VNC)"
-    if [ "$GUI_MODE" = "vnc" ]; then
-        DISPLAY_OPTS="-display vnc=$VNC_PORT"
-    else
-        DISPLAY_OPTS="-display $GUI_MODE"
-    fi
+    echo "ubuntu-vm-run: booting via VNC ($VNC_PORT)"
+    DISPLAY_OPTS="-display vnc=$VNC_PORT"
     GPU_OPTS="-vga virtio"
 fi
 

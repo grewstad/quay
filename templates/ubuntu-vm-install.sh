@@ -1,7 +1,7 @@
 #!/bin/sh
 # ubuntu-vm-install.sh
 # create a new Ubuntu VM image, download the latest Ubuntu Server ISO,
-# and launch the installer directly onto your GPU or Local Monitor.
+# and launch the installer directly onto your GPU.
 #
 # Override any variable via the environment, e.g.:
 #   USE_GPU=1 GPU_ID=01:00.0 GPU_AUDIO_ID=01:00.1 sh ubuntu-vm-install.sh
@@ -21,10 +21,10 @@ THREADS="${THREADS:-2}"
 BRIDGE="${BRIDGE:-br0}"
 
 # GPU / Display settings
-USE_GPU="${USE_GPU:-0}"
+# Default to 1 (GPU Passthrough) for local physical console users
+USE_GPU="${USE_GPU:-1}"
 GPU_ID="${GPU_ID:-}"
 GPU_AUDIO_ID="${GPU_AUDIO_ID:-}"
-GUI_MODE="${GUI_MODE:-sdl}" # Default to local monitor if not using GPU
 VNC_PORT="${VNC_PORT:-127.0.0.1:0}"
 
 die() { echo "ubuntu-vm-install: error: $*" >&2; exit 1; }
@@ -68,29 +68,22 @@ qemu-img create -f qcow2 "$DISK_PATH" "$DISK_SIZE" || die "qemu-img create faile
 
 # build QEMU display/GPU arguments
 if [ "$USE_GPU" = "1" ]; then
-    [ -n "$GPU_ID" ] || die "GPU_ID is not set"
-    [ -n "$GPU_AUDIO_ID" ] || die "GPU_AUDIO_ID is not set"
+    [ -n "$GPU_ID" ] || [ -f /tmp/quay_install.state ] && . /tmp/quay_install.state
+    # If not in env or state, try to detect from VFIO_IDS
+    GPU_ID="${GPU_ID:-${VFIO_IDS%%,*}}" 
+    # Grab the second ID in the list for audio if it exists
+    GPU_AUDIO_ID="${GPU_AUDIO_ID:-${VFIO_IDS#*,}}"
+    
+    [ -n "$GPU_ID" ] || die "GPU_ID is not set (e.g. USE_GPU=1 GPU_ID=01:00.0)"
     echo "ubuntu-vm-install: installing via physical GPU ($GPU_ID)"
     DISPLAY_OPTS="-display none"
-    GPU_OPTS="-device vfio-pci,host=$GPU_ID -device vfio-pci,host=$GPU_AUDIO_ID"
+    GPU_OPTS="-device vfio-pci,host=$GPU_ID"
+    [ -n "$GPU_AUDIO_ID" ] && GPU_OPTS="$GPU_OPTS -device vfio-pci,host=$GPU_AUDIO_ID"
 else
-    echo "ubuntu-vm-install: installing via $GUI_MODE (Local Monitor/VNC)"
-    # If GUI_MODE is 'vnc', append the port. If 'sdl', just use sdl.
-    if [ "$GUI_MODE" = "vnc" ]; then
-        DISPLAY_OPTS="-display vnc=$VNC_PORT"
-    else
-        DISPLAY_OPTS="-display $GUI_MODE"
-    fi
+    echo "ubuntu-vm-install: installing via VNC ($VNC_PORT)"
+    DISPLAY_OPTS="-display vnc=$VNC_PORT"
     GPU_OPTS="-vga virtio"
 fi
-
-cat << EOF
-ubuntu-vm-install: ready
-  image:   $DISK_PATH
-  iso:     $ISO_PATH
-  memory:  $MEM
-  display: $DISPLAY_OPTS
-EOF
 
 qemu-system-x86_64 \
     -enable-kvm \
