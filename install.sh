@@ -124,6 +124,7 @@ if [ -z "$DONE_STEP_PACKAGES" ]; then
         tcpdump bind-tools \
         shadow tmux uuidgen \
         binutils systemd-efistub efitools \
+        xf86-video-intel xf86-video-amdgpu \
         qemu-ui-sdl mesa-dri-gallium mesa-va-gallium
     # EFI stub package name differs between Alpine versions
     apk add --quiet systemd-efistub 2>/dev/null \
@@ -274,15 +275,6 @@ fi
 echo ""
 echo "secure boot:"
 echo "  quay can generate a PK/KEK/db certificate chain and sign the UKI,"
-282: echo "  giving you sole control over what the firmware will execute."
-283: echo ""
-284: echo "  for automatic key enrollment, your firmware must be in setup mode:"
-285: echo "  look for 'reset secure boot keys' or 'clear secure boot keys' under"
-286: echo "  the security tab in your firmware UI. exact wording varies by vendor."
-287: echo ""
-288: echo "  if not in setup mode, keys are generated and the UKI is signed, but"
-289: echo "  enrollment must be done manually from the firmware UI after install."
-290: echo ""
 291: echo "  note: once quay controls the PK, changing boot policy requires your"
 292: echo "  PK private key. set a firmware administrator password to prevent"
 293: echo "  physical access from bypassing this (done in firmware UI)."

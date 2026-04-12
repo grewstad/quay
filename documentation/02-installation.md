@@ -80,6 +80,9 @@ The script will prompt for the following configuration:
 **Hostname**
   Hostname for the system (used for SSH and overlay tarball naming).
 
+**Root password**
+  Initial root password (SSH key auth is recommended post-install).
+
 **SSH public key**
   Paste your public key or let the installer generate a keypair.
 
