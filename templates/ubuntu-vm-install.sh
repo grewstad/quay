@@ -16,6 +16,7 @@ MEM="${MEM:-12G}"
 CORES="${CORES:-4}"
 THREADS="${THREADS:-2}"
 BRIDGE="${BRIDGE:-br0}"
+RUN_AS="${RUN_AS:-vmrunner}"
 
 die() { echo "ubuntu-vm-install: error: $*" >&2; exit 1; }
 
@@ -79,4 +80,6 @@ qemu-system-x86_64 \
     -device usb-kbd \
     -device usb-mouse \
     -display gtk \
+    -sandbox on,obsolete=deny,elevateprivileges=deny,spawn=deny,resourcecontrol=deny \
+    -runas "$RUN_AS" \
     -name "$VM_NAME"

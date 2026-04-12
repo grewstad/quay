@@ -13,8 +13,10 @@ CORES="${CORES:-4}"
 THREADS="${THREADS:-2}"
 BRIDGE="${BRIDGE:-br0}"
 USE_GPU="${USE_GPU:-0}"
+USE_HUGEPAGES="${USE_HUGEPAGES:-0}"
 GPU_ID="${GPU_ID:-}"        # PCI BDF e.g. 01:00.0
 GPU_AUDIO_ID="${GPU_AUDIO_ID:-}"  # PCI BDF e.g. 01:00.1
+RUN_AS="${RUN_AS:-vmrunner}"
 
 die() { echo "ubuntu-vm-run: error: $*" >&2; exit 1; }
 
@@ -38,12 +40,19 @@ else
     GPU_OPTS="-vga virtio"
 fi
 
+# Hugepage allocation
+MEM_OPTS="-m $MEM"
+if [ "$USE_HUGEPAGES" = "1" ]; then
+    MEM_OPTS="$MEM_OPTS -mem-prealloc -object memory-backend-file,id=mem0,size=$MEM,mem-path=/dev/hugepages,share=on,prealloc=on -numa node,memdev=mem0"
+fi
+
+# shellcheck disable=SC2086
 qemu-system-x86_64 \
     -enable-kvm \
     -machine q35,accel=kvm \
     -cpu host \
     -smp "sockets=1,cores=$CORES,threads=$THREADS" \
-    -m "$MEM" \
+    $MEM_OPTS \
     -drive "file=$DISK_PATH,format=qcow2,if=virtio,cache=none,aio=io_uring" \
     -device virtio-net-pci,netdev=net0 \
     -netdev "bridge,id=net0,br=$BRIDGE" \
@@ -52,4 +61,6 @@ qemu-system-x86_64 \
     -device usb-mouse \
     $GPU_OPTS \
     $DISPLAY_OPTS \
+    -sandbox on,obsolete=deny,elevateprivileges=deny,spawn=deny,resourcecontrol=deny \
+    -runas "$RUN_AS" \
     -name "$VM_NAME"

@@ -38,6 +38,7 @@ load_state() {
             ;;
         *)
             echo "quay: resuming..."
+            # shellcheck disable=SC1090
             . "$STATE_FILE"
             ;;
     esac
@@ -46,6 +47,19 @@ load_state() {
 # ── helpers ───────────────────────────────────────────────────────────────────
 
 die() { echo "quay: error: $*" >&2; exit 1; }
+
+check_esp_space() {
+    # check_esp_space <device> <required_bytes>
+    # Returns 0 if space is sufficient, 1 otherwise
+    _mnt="/tmp/esp_check_mnt"
+    mkdir -p "$_mnt"
+    mount "$1" "$_mnt" || return 1
+    # df -k output: Filesystem 1K-blocks Used Available Use% Mounted on
+    _avail_kb=$(df -k "$_mnt" | awk 'NR==2 {print $4}')
+    umount "$_mnt" 2>/dev/null || true
+    rmdir "$_mnt" 2>/dev/null || true
+    [ "$((_avail_kb * 1024))" -ge "$2" ]
+}
 
 guarded_mount() {
     # guarded_mount <device> <mountpoint>
@@ -75,6 +89,7 @@ command -v apk >/dev/null 2>&1 || die "this installer must run inside alpine lin
 cleanup() {
     umount /mnt/esp     2>/dev/null || true
     umount /mnt/storage 2>/dev/null || true
+    rm -rf /tmp/esp_check_mnt /tmp/quay.efi /tmp/quay.efi.unsigned /tmp/quay-cmdline 2>/dev/null || true
 }
 trap cleanup EXIT INT TERM
 load_state
@@ -127,25 +142,41 @@ fi
 
 # ── partitions ────────────────────────────────────────────────────────────────
 if [ -z "$DONE_STEP_PARTITIONS" ]; then
-    echo ""
-echo "two partitions are required:"
-echo "  esp     FAT32, at least 64 MB free; may be shared with an existing OS"
-echo "  storage ext4, for VM images, ISOs, and host configuration"
+    echo "partitions:"
+echo "  esp        FAT32, at least 64 MB; may be shared with an existing OS"
+echo "  boot_part  [optional] FAT32 XBOOTLDR; for UKIs if ESP is too small"
+echo "  storage    ext4, for VM images, ISOs, and host configuration"
 echo ""
 echo "inspect your layout with: lsblk -f"
 echo ""
 
 printf "esp partition: "
 read -r EFI_PART
+printf "boot partition (XBOOTLDR) [enter to skip]: "
+read -r BOOT_PART
 printf "storage partition: "
 read -r STORAGE_PART
+printf "bridge name [br0]: "
+read -r BRIDGE_NAME
+BRIDGE_NAME="${BRIDGE_NAME:-br0}"
 
-    [ -b "$EFI_PART" ]     || die "not a block device: $EFI_PART"
-    [ -b "$STORAGE_PART" ] || die "not a block device: $STORAGE_PART"
+  for dev in "$EFI_PART" "$STORAGE_PART" ${BOOT_PART:-}; do
+    [ -n "$dev" ] && [ -b "$dev" ] || die "block device $dev does not exist"
+done
+[ -n "$BOOT_PART" ] && { [ -b "$BOOT_PART" ] || die "block device does not exist: $BOOT_PART"; }
+
+# check EFI partition size
+EFI_SIZE_KB=$(df -k "$EFI_PART" | awk 'NR==2 {print $2}')
+if [ "${EFI_SIZE_KB:-0}" -lt 65536 ]; then
+    echo "quay: warning: EFI partition ($EFI_PART) is small (${EFI_SIZE_KB:-0}KB)"
+    echo "      installation will attempt ultra-slim UKI optimization if needed."
+fi
     [ "$EFI_PART" != "$STORAGE_PART" ] || die "esp and storage must be different partitions"
 
     save_var EFI_PART "$EFI_PART"
+    save_var BOOT_PART "$BOOT_PART"
     save_var STORAGE_PART "$STORAGE_PART"
+    save_var BRIDGE_NAME "$BRIDGE_NAME"
     mark_step PARTITIONS
 fi
 
@@ -167,24 +198,59 @@ case "$EFI_FSTYPE" in
     vfat) ;;
     "")
         echo "quay: $EFI_PART is unformatted"
-        ask_yn "format as FAT32?" && format_efi || die "EFI partition must be FAT32"
+        if ask_yn "format as FAT32?"; then
+            format_efi
+        else
+            die "EFI partition must be FAT32"
+        fi
         ;;
     *)
         echo "quay: $EFI_PART is $EFI_FSTYPE, not FAT32"
-        ask_yn "reformat as FAT32? (destructive)" && format_efi || die "EFI partition must be FAT32"
+        if ask_yn "reformat as FAT32? (destructive)"; then
+            format_efi
+        else
+            die "EFI partition must be FAT32"
+        fi
         ;;
 esac
+
+if [ -n "$BOOT_PART" ]; then
+    BOOT_FSTYPE=$(blkid -s TYPE -o value "$BOOT_PART" 2>/dev/null || true)
+    if [ "$BOOT_FSTYPE" != "vfat" ]; then
+        echo "quay: $BOOT_PART is $BOOT_FSTYPE, not FAT32 (XBOOTLDR requirement)"
+        if ask_yn "reformat as FAT32?"; then
+            mkfs.fat -F32 "$BOOT_PART" || die "mkfs.fat failed on $BOOT_PART"
+        else
+            die "XBOOTLDR partition must be FAT32"
+        fi
+    fi
+    # enforce XBOOTLDR GUID (GPT only)
+    echo "quay: enforcing XBOOTLDR GUID on $BOOT_PART"
+    _dev_disk=$(echo "$BOOT_PART" | sed -E 's/p?[0-9]+$//')
+    _dev_num=$(echo "$BOOT_PART" | grep -oE '[0-9]+$')
+    if [ -n "$_dev_disk" ] && [ -n "$_dev_num" ]; then
+        sfdisk --part-type "$_dev_disk" "$_dev_num" bc13c2ff-5950-4225-ba4a-63f33022d15f >/dev/null 2>&1 || true
+    fi
+fi
 
 STORAGE_FSTYPE=$(blkid -s TYPE -o value "$STORAGE_PART" 2>/dev/null || true)
 case "$STORAGE_FSTYPE" in
     ext4) ;;
     "")
         echo "quay: $STORAGE_PART is unformatted"
-        ask_yn "format as ext4?" && format_storage || die "storage partition must be ext4"
+        if ask_yn "format as ext4?"; then
+            format_storage
+        else
+            die "storage partition must be ext4"
+        fi
         ;;
     *)
         echo "quay: $STORAGE_PART is $STORAGE_FSTYPE, not ext4"
-        ask_yn "reformat as ext4? (destructive)" && format_storage || die "storage partition must be ext4"
+        if ask_yn "reformat as ext4? (destructive)"; then
+            format_storage
+        else
+            die "storage partition must be ext4"
+        fi
         ;;
     esac
     mark_step FILESYSTEM
@@ -196,6 +262,11 @@ STORAGE_UUID=$(blkid -s UUID -o value "$STORAGE_PART")
 [ -n "$STORAGE_UUID" ] || die "cannot read UUID from $STORAGE_PART"
 
 save_var EFI_UUID "$EFI_UUID"
+if [ -n "$BOOT_PART" ]; then
+    BOOT_UUID=$(blkid -s UUID -o value "$BOOT_PART")
+    [ -n "$BOOT_UUID" ] || die "cannot read UUID from $BOOT_PART"
+    save_var BOOT_UUID "$BOOT_UUID"
+fi
 save_var STORAGE_UUID "$STORAGE_UUID"
 
 echo ""
@@ -211,47 +282,31 @@ if [ -z "$DONE_STEP_HARDWARE" ]; then
     echo "cpu topology:"
 lscpu -e=CPU,CORE,SOCKET 2>/dev/null || lscpu
 echo ""
-printf "cores to isolate for guests (e.g. 1-3,5-7) [enter to skip]: "
-read -r ISO_CORES
+    printf "cores to isolate for guests (e.g. 1-3,5-7) [enter to skip]: "
+    read -r ISO_CORES
 
-echo ""
-echo "pci devices:"
-lspci -nn 2>/dev/null | grep -iE "vga|3d|display|usb|audio" | sed 's/^/  /' || true
-echo ""
-printf "vfio device IDs, comma-separated (e.g. 10de:2684,10de:22ba) [enter to skip]: "
-read -r VFIO_IDS
+    printf "number of 2MB hugepages to reserve [enter to skip]: "
+    read -r HUGEPAGE_COUNT
+
+    echo ""
+    echo "pci devices:"
+    lspci -nn 2>/dev/null | grep -iE "vga|3d|display|usb|audio" | sed 's/^/  /' || true
+    echo ""
+    printf "vfio device IDs, comma-separated (e.g. 10de:2684,10de:22ba) [enter to skip]: "
+    read -r VFIO_IDS
 
     # validate VFIO ID format if provided
     if [ -n "$VFIO_IDS" ]; then
         _check=$(echo "$VFIO_IDS" | tr -d '0-9a-fA-F:,')
-        [ -z "$_check" ] || die "invalid VFIO IDs format: $VFIO_IDS"
+        if [ -n "$_check" ]; then
+            die "invalid VFIO IDs format: $VFIO_IDS"
+        fi
     fi
 
     save_var ISO_CORES "$ISO_CORES"
     save_var VFIO_IDS "$VFIO_IDS"
+    save_var HUGEPAGE_COUNT "$HUGEPAGE_COUNT"
     mark_step HARDWARE
-fi
-
-# ── bootloader ────────────────────────────────────────────────────────────────
-if [ -z "$DONE_STEP_BOOTLOADER" ]; then
-    echo ""
-echo "boot method:"
-echo "  1  efistub  quay.efi registered directly with UEFI firmware (recommended)"
-echo "              quay is placed first in boot order; no bootloader required"
-echo "  2  grub     menuentry injected into existing GRUB config"
-echo "              use this if GRUB manages other OS entries"
-echo ""
-printf "choice [1/2]: "
-read -r BOOTLOADER_CHOICE
-
-    case "$BOOTLOADER_CHOICE" in
-        1) BOOT_MODE="efistub" ;;
-        2) BOOT_MODE="grub"    ;;
-        *) die "invalid boot choice: $BOOTLOADER_CHOICE" ;;
-    esac
-
-    save_var BOOT_MODE "$BOOT_MODE"
-    mark_step BOOTLOADER
 fi
 
 # ── secure boot ───────────────────────────────────────────────────────────────
@@ -275,7 +330,9 @@ echo ""
 
 SECURE_BOOT=false
 if [ -z "$DONE_STEP_SECURE_BOOT_CONFIG" ]; then
-    ask_yn "enable secure boot?" && SECURE_BOOT=true
+    if ask_yn "enable secure boot?"; then
+        SECURE_BOOT=true
+    fi
 
     SETUP_MODE=false
     if [ "$SECURE_BOOT" = "true" ]; then
@@ -284,8 +341,12 @@ if [ -z "$DONE_STEP_SECURE_BOOT_CONFIG" ]; then
         SETUP_VAR="/sys/firmware/efi/efivars/SetupMode-8be4df61-93ca-11d2-aa0d-00e098032b8c"
         if [ -f "$SETUP_VAR" ]; then
             # byte 4 (skip 4-byte EFI attribute header) is the mode flag
-            SM_BYTE=$(dd if="$SETUP_VAR" bs=1 skip=4 count=1 2>/dev/null | hexdump -ve '1/1 "%02x"')
-            [ "$SM_BYTE" = "01" ] && SETUP_MODE=true
+            # Use 'od' which is often more standard in minimal environments, or stick with hexdump but ensure it works.
+            # Hexdump -n 1 -s 4 -e '1/1 "%02x"' is better than dd pipe.
+            SM_BYTE=$(hexdump -n 1 -s 4 -e '1/1 "%022x"' "$SETUP_VAR" 2>/dev/null || echo "00")
+            if [ "$SM_BYTE" = "01" ]; then
+                SETUP_MODE=true
+            fi
         fi
 
         if [ "$SETUP_MODE" = "true" ]; then
@@ -351,10 +412,26 @@ fi
 
 echo ""
 if [ -z "$DONE_STEP_FORGE_UKI" ]; then
+    # Estimate size: kernel (~15M) + initrd (~80M) + gaps + stub ≈ 120MB
+    # If using xz, initrd drops to ~30M.
+    ESTIMATED_SIZE=125829120  # 120 MB
+    SLIM_MODE=""
+
+    _check_part="$EFI_PART"
+    [ -n "$BOOT_PART" ] && _check_part="$BOOT_PART"
+
+    if ! check_esp_space "$_check_part" "$ESTIMATED_SIZE"; then
+        echo "quay: warning: low space on target boot partition ($_check_part)"
+        echo "quay: attempting to forge a slim UKI (XZ compression, module pruning)..."
+        SLIM_MODE="--slim"
+    fi
+
     if [ "$SECURE_BOOT" = "true" ]; then
-        sh "$QUAY_DIR/forge-uki.sh" "$STORAGE_UUID" "$VFIO_IDS" "$ISO_CORES" --sign
+        # shellcheck disable=SC2086
+        sh "$QUAY_DIR/forge-uki.sh" "$STORAGE_UUID" "$VFIO_IDS" "$ISO_CORES" "$HUGEPAGE_COUNT" $SLIM_MODE --sign
     else
-        sh "$QUAY_DIR/forge-uki.sh" "$STORAGE_UUID" "$VFIO_IDS" "$ISO_CORES"
+        # shellcheck disable=SC2086
+        sh "$QUAY_DIR/forge-uki.sh" "$STORAGE_UUID" "$VFIO_IDS" "$ISO_CORES" "$HUGEPAGE_COUNT" $SLIM_MODE
     fi
     mark_step FORGE_UKI
 fi
@@ -417,7 +494,7 @@ if [ "$SECURE_BOOT" = "true" ] && [ -z "$DONE_STEP_ENROLL" ]; then
         echo "via your firmware's 'enroll from file' option, in that order."
         echo ""
         echo "alternatively, boot a UEFI shell and run:"
-        echo "  FS0:\\EFI\\Quay\\enroll-sb.nsh"
+        printf "  FS0:\\\\EFI\\\\Quay\\\\enroll-sb.nsh\n"
         echo ""
 
         # copy .auth files to ESP and write a UEFI shell enrollment script
@@ -443,124 +520,64 @@ fi
 # ── deploy ────────────────────────────────────────────────────────────────────
 if [ -z "$DONE_STEP_DEPLOY" ]; then
     echo "quay: deploying"
-    mkdir -p /mnt/esp
-    guarded_mount "$EFI_PART" /mnt/esp
-    mkdir -p /mnt/esp/EFI/Quay
-    cp /tmp/quay.efi /mnt/esp/EFI/Quay/quay.efi
+    _target_part="$EFI_PART"
+    [ -n "$BOOT_PART" ] && _target_part="$BOOT_PART"
 
-if [ "$BOOT_MODE" = "efistub" ]; then
+    mkdir -p /mnt/target_boot
+    guarded_mount "$_target_part" /mnt/target_boot
+    
+    # Standard path for UKIs (XBOOTLDR spec)
+    UKI_DIR="/mnt/target_boot/EFI/Linux"
+    mkdir -p "$UKI_DIR"
+    cp /tmp/quay.efi "$UKI_DIR/quay.efi"
+
+    # EFISTUB deployment
     # derive parent disk and partition number from sysfs — no lsblk needed
-    EFI_KNAME=$(basename "$(readlink -f "$EFI_PART")")
-    # the partition's parent is the first device in the 'slaves' link, or
-    # parsed from the name by stripping a trailing digit sequence
-    SYS_PART="/sys/class/block/$EFI_KNAME"
-    if [ -f "$SYS_PART/partition" ]; then
-        PARTNUM=$(cat "$SYS_PART/partition")
-        # follow the sysfs link up one level to get the parent device name
-        PARENT_KNAME=$(basename "$(readlink -f "$SYS_PART/..")")
+    _kname=$(basename "$(readlink -f "$_target_part")")
+    _sys_part="/sys/class/block/$_kname"
+    if [ -f "$_sys_part/partition" ]; then
+        _partnum=$(cat "$_sys_part/partition")
+        _parent_kname=$(basename "$(readlink -f "$_sys_part/..")")
     else
-        die "cannot read partition info for $EFI_PART from /sys/class/block"
+        die "cannot read partition info for $_target_part from /sys/class/block"
     fi
-    DISK="/dev/${PARENT_KNAME}"
-    [ -b "$DISK" ] || die "parent disk $DISK is not a block device"
+    _disk="/dev/${_parent_kname}"
+    [ -b "$_disk" ] || die "parent disk $_disk is not a block device"
 
     # remove stale quay boot entries (match exact label)
-    efibootmgr | awk '/[* ]Quay$/{gsub(/^Boot|[*].*/,""); print}' \
-        | while read -r id; do efibootmgr -b "$id" -B >/dev/null 2>&1 || true; done
+    efibootmgr | awk '/[ \t]Quay$/ {
+        id = $1;
+        sub(/^Boot/, "", id);
+        sub(/[*]$/, "", id);
+        print id
+    }' | while read -r id; do
+        if [ -n "$id" ]; then
+            efibootmgr -b "$id" -B >/dev/null 2>&1 || true
+        fi
+    done
 
+    # register the new entry
     efibootmgr -c -L "Quay" \
-        -d "$DISK" -p "$PARTNUM" \
-        -l "\\EFI\\Quay\\quay.efi" >/dev/null || die "efibootmgr failed"
-
-    echo "quay: building recovery UKI (no VFIO, no isolcpus)"
-    if [ "$SECURE_BOOT" = "true" ]; then
-        sh "$QUAY_DIR/forge-uki.sh" "$STORAGE_UUID" "" "" --sign
-    else
-        sh "$QUAY_DIR/forge-uki.sh" "$STORAGE_UUID" "" ""
-    fi
-    cp /tmp/quay.efi /mnt/esp/EFI/Quay/quay-recovery.efi
-
-    efibootmgr -c -L "Quay (recovery)" \
-        -d "$DISK" -p "$PARTNUM" \
-        -l "\\EFI\\Quay\\quay-recovery.efi" >/dev/null
+        -d "$_disk" -p "$_partnum" \
+        -l "\\EFI\\Linux\\quay.efi" >/dev/null || die "efibootmgr failed"
 
     # put quay first in boot order
-    QUAY_NUM=$(efibootmgr | awk '/Boot[0-9A-Fa-f]{4}\* Quay$/{gsub(/Boot|\*.*/,""); print; exit}')
-    if [ -n "$QUAY_NUM" ]; then
-        CURRENT_ORDER=$(efibootmgr | awk '/^BootOrder:/{print $2}')
-        FILTERED_ORDER=$(echo "$CURRENT_ORDER" | tr ',' '\n' \
-            | grep -iv "^${QUAY_NUM}$" | tr '\n' ',' | sed 's/,$//')
-        if [ -n "$FILTERED_ORDER" ]; then
-            efibootmgr -o "${QUAY_NUM},${FILTERED_ORDER}" >/dev/null
+    _quay_num=$(efibootmgr | awk '/Boot[0-9A-Fa-f]{4}\* Quay$/{gsub(/Boot|\*.*/,""); print; exit}')
+    if [ -n "$_quay_num" ]; then
+        _current_order=$(efibootmgr | awk '/^BootOrder:/{print $2}')
+        # shellcheck disable=SC2001
+        _filtered_order=$(echo "$_current_order" | tr ',' '\n' \
+            | grep -iv "^${_quay_num}$" | tr '\n' ',' | sed 's/,$//')
+        if [ -n "$_filtered_order" ]; then
+            efibootmgr -o "${_quay_num},${_filtered_order}" >/dev/null
         else
-            efibootmgr -o "${QUAY_NUM}" >/dev/null
+            efibootmgr -o "${_quay_num}" >/dev/null
         fi
         echo "quay: boot order updated; quay is first"
     fi
 
-elif [ "$BOOT_MODE" = "grub" ]; then
-    # GRUB chainloads quay.efi as a PE binary. GRUB does not verify PE signatures
-    # by default — if secure boot is active end-to-end, GRUB itself must be in a
-    # signed chain (typically via shim).
-    GRUB_CFG=""
-    for candidate in /boot/grub2/grub.cfg /boot/grub/grub.cfg /boot/efi/EFI/*/grub.cfg; do
-        [ -f "$candidate" ] && GRUB_CFG="$candidate" && break
-    done
-
-    GRUB_CUSTOM=""
-    for candidate in /etc/grub.d/40_custom /etc/grub.d/41_custom; do
-        [ -f "$candidate" ] && GRUB_CUSTOM="$candidate" && break
-    done
-
-    [ -n "$GRUB_CUSTOM" ] || die "cannot find /etc/grub.d/40_custom or 41_custom"
-
-    # idempotent: remove any previous quay stanza before appending
-    if grep -q "BEGIN QUAY" "$GRUB_CUSTOM" 2>/dev/null; then
-        sed -i '/### BEGIN QUAY ###/,/### END QUAY ###/d' "$GRUB_CUSTOM"
-    fi
-
-    cat >> "$GRUB_CUSTOM" << EOF
-
-### BEGIN QUAY ###
-menuentry "Quay" {
-    insmod part_gpt
-    insmod fat
-    insmod chain
-    search --no-floppy --fs-uuid --set=root ${EFI_UUID}
-    chainloader /EFI/Quay/quay.efi
-}
-
-menuentry "Quay (recovery)" {
-    insmod part_gpt
-    insmod fat
-    insmod chain
-    search --no-floppy --fs-uuid --set=root ${EFI_UUID}
-    chainloader /EFI/Quay/quay-recovery.efi
-}
-### END QUAY ###
-EOF
-
-    echo "quay: building recovery UKI"
-    if [ "$SECURE_BOOT" = "true" ]; then
-        sh "$QUAY_DIR/forge-uki.sh" "$STORAGE_UUID" "" "" --sign
-    else
-        sh "$QUAY_DIR/forge-uki.sh" "$STORAGE_UUID" "" ""
-    fi
-    cp /tmp/quay.efi /mnt/esp/EFI/Quay/quay-recovery.efi
-
-    if command -v update-grub >/dev/null 2>&1; then
-        update-grub
-    elif command -v grub-mkconfig >/dev/null 2>&1; then
-        grub-mkconfig -o "${GRUB_CFG:-/boot/grub/grub.cfg}"
-    elif command -v grub2-mkconfig >/dev/null 2>&1; then
-        grub2-mkconfig -o "${GRUB_CFG:-/boot/grub2/grub.cfg}"
-    else
-        echo "quay: warning: could not find grub-mkconfig or update-grub"
-        echo "quay: run grub-mkconfig manually to activate the menu entry"
-    fi
-fi
-
-    umount /mnt/esp
+    umount /mnt/target_boot
+    rmdir /mnt/target_boot
     mark_step DEPLOY
 fi
 
@@ -586,10 +603,19 @@ if [ -z "$PRIMARY_NIC" ]; then
 fi
 [ -n "$PRIMARY_NIC" ] || die "cannot detect a primary network interface"
 
-sed "s/{{NIC}}/$PRIMARY_NIC/g" "$QUAY_DIR/templates/interfaces.tpl" > /etc/network/interfaces
+sed -e "s/{{NIC}}/$PRIMARY_NIC/g" -e "s/br0/$BRIDGE_NAME/g" "$QUAY_DIR/templates/interfaces.tpl" > /etc/network/interfaces
+
+# Configure QEMU bridge helper
+mkdir -p /etc/qemu
+echo "allow $BRIDGE_NAME" > /etc/qemu/bridge.conf
+chmod 644 /etc/qemu/bridge.conf
 
 cp "$QUAY_DIR/templates/sshd_config.tpl" /etc/ssh/sshd_config
 ssh-keygen -A >/dev/null 2>&1
+
+# Configure nftables firewall
+cat "$QUAY_DIR/templates/nftables.tpl" | sed "s/br0/$BRIDGE_NAME/g" > /etc/nftables.nft
+rc-update add nftables default >/dev/null 2>&1 || true
 
 rc-update add sshd       default >/dev/null 2>&1 || true
 rc-update add networking boot    >/dev/null 2>&1 || true
@@ -599,7 +625,7 @@ rc-update add networking boot    >/dev/null 2>&1 || true
 
 mkdir -p /etc/mkinitfs
 cat > /etc/mkinitfs/mkinitfs.conf << 'EOF'
-features="vfio vfio_pci vfio_iommu_type1 vfio_virqfd kvm kvm_amd kvm_intel base scsi ahci nvme usb-storage ext4"
+features="vfio vfio_pci vfio_iommu_type1 vfio_virqfd kvm kvm_amd kvm_intel base scsi ahci nvme usb-storage ext4 bridge tun"
 EOF
 mkinitfs >/dev/null 2>&1 || true
 
@@ -611,14 +637,30 @@ DEFAULT_MEDIA=UUID=$STORAGE_UUID
 LBU_BACKUPDIR=/
 EOF
 
-# copy the running modloop to storage so the baked cmdline can find it
-MODLOOP=$(ls /lib/modloop-* 2>/dev/null | head -n 1 || true)
-[ -n "$MODLOOP" ] && cp "$MODLOOP" /mnt/storage/modloop-lts
+# Add persistent mount to fstab
+if ! grep -q "$STORAGE_UUID" /etc/fstab; then
+    echo "UUID=$STORAGE_UUID  /mnt/storage  ext4  defaults,noatime  0  2" >> /etc/fstab
+fi
+# Ensure the mount point exists and is used
+mkdir -p /mnt/storage
+guarded_mount "$STORAGE_PART" /mnt/storage
 
-# redirect apk cache to storage partition
-rm -rf /etc/apk/cache
+# copy the running modloop to storage so the baked cmdline can find it
+MODLOOP=""
+for ml in /lib/modloop-*; do
+    if [ -f "$ml" ]; then
+        MODLOOP="$ml"
+        break
+    fi
+done
+if [ -n "$MODLOOP" ]; then
+    cp "$MODLOOP" /mnt/storage/modloop-lts
+fi
+
+# redirect apk cache to storage partition (correct Alpine path)
+rm -rf /var/cache/apk
 mkdir -p /mnt/storage/cache
-ln -sf /mnt/storage/cache /etc/apk/cache
+ln -sf /mnt/storage/cache /var/cache/apk
 apk cache download >/dev/null 2>&1 || true
 
 mkdir -p /mnt/storage/vms /mnt/storage/isos /mnt/storage/logs
@@ -636,6 +678,7 @@ for f in \
     /etc/lbu/lbu.conf \
     /etc/apk/repositories \
     /root/.ssh/authorized_keys \
+    /etc/nftables.nft \
     /etc/mkinitfs/mkinitfs.conf; do
     lbu include "$f" >/dev/null 2>&1 || true
 done
@@ -656,8 +699,8 @@ SECBOOT_STATUS="unsigned"
 echo ""
 echo "quay: installed"
 echo ""
-echo "  uki      /EFI/Quay/quay.efi"
-echo "  boot     $BOOT_MODE"
+echo "  uki      /EFI/Linux/quay.efi"
+echo "  boot     efistub"
 echo "  secboot  $SECBOOT_STATUS"
 echo "  nic      $PRIMARY_NIC → br0"
 echo "  storage  $STORAGE_PART ($STORAGE_UUID)"

@@ -9,8 +9,13 @@ The installer does not create partitions. Prepare them beforehand.
 
 **ESP (EFI System Partition)**
   Format: FAT32
-  Size: 64 MB minimum (may be shared with existing OS)
-  The installer writes only to /EFI/Quay/ on this partition.
+  Size: 64 MB minimum
+  Stores the UEFI boot records. Quay registers a boot entry pointing to its UKI.
+
+**XBOOTLDR (extended boot partition) [Optional]**
+  Format: FAT32
+  Size: 256 MB or more (recommended for large UKIs)
+  Recommended if your ESP is < 128 MB. The installer will store the 100MB+ UKI image here and set the standardized XBOOTLDR GUID.
 
 **Storage Partition**
   Format: ext4
@@ -21,15 +26,14 @@ Using parted (adapt device names to your system):
 
 ```bash
 parted /dev/sdX mklabel gpt
-parted /dev/sdX mkpart ESP fat32 1MiB 513MiB
+parted /dev/sdX mkpart ESP fat32 1MiB 129MiB
 parted /dev/sdX set 1 esp on
-parted /dev/sdX mkpart storage ext4 513MiB 100%
+parted /dev/sdX mkpart XBOOTLDR fat32 129MiB 1Gib
+parted /dev/sdX mkpart storage ext4 1GiB 100%
 mkfs.fat -F32 /dev/sdX1
-mkfs.ext4 /dev/sdX2
+mkfs.fat -F32 /dev/sdX2
+mkfs.ext4 /dev/sdX3
 ```
-
-If an existing ESP from another OS is available, reuse it. The installer
-writes only under /EFI/Quay/ and will not interfere with other bootloaders.
 
 ### installation procedure
 
@@ -58,17 +62,17 @@ The script will prompt for the following configuration:
 **EFI partition path**
   The FAT32 partition path (e.g. /dev/sda1)
 
+**Boot partition (XBOOTLDR) [Optional]**
+  A separate partition to store the UKI. Highly recommended for small ESPs.
+
 **Storage partition path**
-  The ext4 partition path (e.g. /dev/sda2)
+  The ext4 partition path (e.g. /dev/sda3)
 
 **CPU cores to isolate (optional)**
   Shown after lscpu -e output. Specify a range for guest isolation.
 
 **VFIO device IDs (optional)**
   Shown after lspci -nn output. Specify devices to pass through to guests.
-
-**Boot method**
-  Choose EFISTUB (direct UEFI) or GRUB menuentry injection.
 
 **Secure Boot**
   Enable or disable (see documentation/06-security.md for details).
@@ -86,35 +90,30 @@ The script will prompt for the following configuration:
 
 `forge-uki.sh` can be run standalone to rebuild the UKI without reinstalling everything. Useful when VFIO IDs or isolated cores change.
 
-**Usage:** `forge-uki.sh <storage_uuid> [vfio_ids] [iso_cores] [--sign]`
+**Usage:** `forge-uki.sh <storage_uuid> [vfio_ids] [iso_cores] [--slim] [--sign]`
 
 * `storage_uuid` — UUID of the storage partition (`blkid -s UUID -o value`)
-* `vfio_ids` — comma-separated vendor:device IDs, or empty string
-* `iso_cores` — isolcpus range, or empty string
+* `vfio_ids` — comma-separated vendor:device IDs
+* `iso_cores` — isolcpus range
+* `--slim` — aggressive initramfs pruning for small partitions
 * `--sign` — sign the UKI with the db key in `/mnt/storage/secureboot/`
 
-After rebuilding, copy `/tmp/quay.efi` to `/EFI/Quay/quay.efi` on the **ESP**.
+After rebuilding, the installer or the user must copy `/tmp/quay.efi` to `/EFI/Linux/quay.efi` on the **BOOT_PART** (or ESP).
 
 
 ---
 
-### BOOT METHODS
+### BOOT METHOD: EFISTUB
 
-**EFISTUB**
-`quay.efi` is registered directly with the firmware via `efibootmgr`. No bootloader is required. Quay is placed first in the **UEFI boot order**. A **recovery entry** (no VFIO, no isolcpus) is registered second. This is the **recommended** method.
+Quay uses pure **EFISTUB** boot. The `quay.efi` image is registered directly with the firmware via `efibootmgr`. No 3rd-party bootloader (GRUB, etc.) is used. 
 
-**GRUB**
-A menuentry is injected into `/etc/grub.d/40_custom` and `grub-mkconfig` is run. The entry uses GRUB's **chainloader** to load `quay.efi` as a PE binary. Use this method if you need **GRUB** for another OS and cannot or do not want to manage boot order with `efibootmgr`.
-
-> [!NOTE]
-> GRUB's chainloader does not verify PE signatures. If **Secure Boot** is active, GRUB itself must be in a signed chain (typically via **shim**) for the boot path to be trusted end-to-end.
-
+Quay is placed first in the **UEFI boot order**. This method provides the fastest boot path and minimum attack surface.
 
 ---
 
 ### RECOVERY
 
-A second **UKI** (`quay-recovery.efi`) is built and registered during install with no **VFIO bindings**, no **CPU isolation**, and no **Secure Boot** requirement. Boot it from the firmware boot menu if the primary entry does not come up.
+A second **UKI** (`quay-recovery.efi`) is built and registered during install (if space permits) with no **VFIO bindings** and no **CPU isolation**. Boot it from the firmware boot menu if the primary entry does not come up.
 
 ---
 
@@ -123,10 +122,10 @@ A second **UKI** (`quay-recovery.efi`) is built and registered during install wi
 If you change **VFIO IDs**, **isolcpus**, or **hugepage settings**, rebuild and redeploy the **UKI**:
 
 ```bash
-sh /path/to/quay/forge-uki.sh "$(blkid -s UUID -o value /dev/sdX2)" \
+sh /path/to/quay/forge-uki.sh "$(blkid -s UUID -o value /dev/sdX3)" \
     "<vfio-ids>" "<cpu-range>" --sign
 
-mount /dev/sdX1 /mnt/esp
-cp /tmp/quay.efi /mnt/esp/EFI/Quay/quay.efi
-umount /mnt/esp
+mount /dev/sdX2 /mnt/boot  # xbootldr partition
+cp /tmp/quay.efi /mnt/boot/EFI/Linux/quay.efi
+umount /mnt/boot
 ```

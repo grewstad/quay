@@ -12,10 +12,11 @@ set -e
 # Edit these to match your hardware before running.
 
 EFI_PART=""           # e.g. /dev/sda1 — FAT32 EFI System Partition
-STORAGE_PART=""       # e.g. /dev/sda2 — ext4 storage partition
+BOOT_PART=""          # e.g. /dev/sda2 — FAT32 XBOOTLDR (optional)
+STORAGE_PART=""       # e.g. /dev/sda3 — ext4 storage partition
 ISOLATE_CPUS=""       # e.g. "2-5,8-11" — CPU range to reserve for guests
+HUGEPAGE_COUNT=""     # e.g. "2048" — number of 2MB hugepages to reserve
 VFIO_IDS=""           # e.g. "10de:2684,10de:22ba" — PCI IDs to pass through
-BOOT_CHOICE="1"       # 1 = efistub (recommended), 2 = grub
 SECURE_BOOT="n"       # y to enable secure boot key generation + signing
 HOSTNAME="quay-host"  # hostname for the installed system
 SSH_KEY_FILE="$HOME/.ssh/id_ed25519.pub"  # leave empty to generate a keypair
@@ -29,10 +30,22 @@ die() { echo "preinstall: error: $*" >&2; exit 1; }
 [ -n "$EFI_PART" ]       || die "EFI_PART is not set; edit the configuration section at the top"
 [ -n "$STORAGE_PART" ]   || die "STORAGE_PART is not set; edit the configuration section at the top"
 [ "$EFI_PART" != "$STORAGE_PART" ] || die "EFI_PART and STORAGE_PART must be different partitions"
+if [ -n "$BOOT_PART" ]; then
+    [ "$BOOT_PART" != "$EFI_PART" ]     || die "BOOT_PART and EFI_PART must be different"
+    [ "$BOOT_PART" != "$STORAGE_PART" ] || die "BOOT_PART and STORAGE_PART must be different"
+fi
 
-for dev in "$EFI_PART" "$STORAGE_PART"; do
-    [ -b "$dev" ] || die "block device does not exist: $dev"
+for dev in "$EFI_PART" "$STORAGE_PART" ${BOOT_PART:-}; do
+    [ -n "$dev" ] && [ -b "$dev" ] || die "block device $dev does not exist"
 done
+
+# check EFI partition size
+# shellcheck disable=SC2046
+EFI_SIZE_KB=$(df -k "$EFI_PART" | awk 'NR==2 {print $2}')
+if [ "${EFI_SIZE_KB:-0}" -lt 65536 ]; then
+    echo "preinstall: warning: EFI partition ($EFI_PART) is small (${EFI_SIZE_KB:-0}KB)"
+    echo "            installation will attempt ultra-slim UKI optimization if needed."
+fi
 
 # ── apk repositories ─────────────────────────────────────────────────────────
 # The Alpine live ISO ships with a minimal/volatile repo config.
@@ -58,7 +71,7 @@ apk update --quiet
 # ── dependencies ──────────────────────────────────────────────────────────────
 
 echo "preinstall: verifying build tools"
-apk add --quiet blkid dosfstools e2fsprogs util-linux >/dev/null 2>&1
+apk add --quiet blkid dosfstools e2fsprogs util-linux
 
 # ── filesystem check / format ─────────────────────────────────────────────────
 
@@ -70,8 +83,11 @@ if [ "$EFI_TYPE" != "vfat" ]; then
     case "$(echo "$answer" | tr '[:upper:]' '[:lower:]')" in
         y|yes)
             apk add --quiet dosfstools
-            mkfs.fat -F32 "$EFI_PART" || die "mkfs.fat failed"
-            EFI_TYPE=vfat
+            if mkfs.fat -F32 "$EFI_PART"; then
+                EFI_TYPE=vfat
+            else
+                die "mkfs.fat failed"
+            fi
             ;;
         *)
             die "EFI partition must be FAT32 to continue"
@@ -87,8 +103,11 @@ if [ "$STORAGE_TYPE" != "ext4" ]; then
     case "$(echo "$answer" | tr '[:upper:]' '[:lower:]')" in
         y|yes)
             apk add --quiet e2fsprogs
-            mkfs.ext4 -F "$STORAGE_PART" || die "mkfs.ext4 failed"
-            STORAGE_TYPE=ext4
+            if mkfs.ext4 -F "$STORAGE_PART"; then
+                STORAGE_TYPE=ext4
+            else
+                die "mkfs.ext4 failed"
+            fi
             ;;
         *)
             die "storage partition must be ext4 to continue"
@@ -100,11 +119,13 @@ fi
 
 echo ""
 echo "=== preinstall summary ==="
-echo "EFI partition:     $EFI_PART  ($EFI_TYPE)"
-echo "storage partition: $STORAGE_PART  ($STORAGE_TYPE)"
+echo "EFI partition:      $EFI_PART  ($EFI_TYPE)"
+echo "boot partition:     ${BOOT_PART:-<none>}"
+echo "storage partition:  $STORAGE_PART  ($STORAGE_TYPE)"
 echo "isolcpus:          ${ISOLATE_CPUS:-<none>}"
+echo "hugepages:         ${HUGEPAGE_COUNT:-<none>}"
 echo "vfio IDs:          ${VFIO_IDS:-<none>}"
-echo "boot method:       $BOOT_CHOICE  (1 = efistub, 2 = grub)"
+echo "boot method:       efistub (hardcoded)"
 echo "secure boot:       $SECURE_BOOT"
 echo "hostname:          $HOSTNAME"
 
@@ -124,10 +145,11 @@ echo ""
 echo "Answer the prompts exactly as shown below:"
 echo ""
 echo "  esp partition:                    $EFI_PART"
+echo "  boot partition (XBOOTLDR):        ${BOOT_PART:-<press enter to skip>}"
 echo "  storage partition:                $STORAGE_PART"
 echo "  cores to isolate for guests:      ${ISOLATE_CPUS:-<press enter>}"
+echo "  number of 2MB hugepages:          ${HUGEPAGE_COUNT:-<press enter>}"
 echo "  vfio device IDs, comma-separated: ${VFIO_IDS:-<press enter>}"
-echo "  choice [1/2]:                     $BOOT_CHOICE"
 echo "  enable secure boot? [y/N]:        $SECURE_BOOT"
 echo "  hostname:                         $HOSTNAME"
 echo "  root password:                    <type a strong password>"

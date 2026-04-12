@@ -2,20 +2,31 @@
 # forge-uki.sh — quay UKI builder
 # fuses vmlinuz + initramfs + cmdline into a signed or unsigned quay.efi
 #
-# usage: forge-uki.sh <storage_uuid> [vfio_ids] [iso_cores] [--sign]
+# usage: forge-uki.sh ST_UUID [VFIO] [CORES] [HP_COUNT] [--slim] [--sign]
 #
 # https://github.com/grewstad/quay
 set -e
 
 # ── arguments ─────────────────────────────────────────────────────────────────
 
-[ $# -ge 1 ] || { echo "quay-forge: error: usage: forge-uki.sh <storage_uuid> [vfio_ids] [iso_cores] [--sign]" >&2; exit 1; }
+[ $# -ge 1 ] || { echo "quay-forge: error: usage: forge-uki.sh <st_uuid> [vfio] [cores] [hp_count] [--slim] [--sign]" >&2; exit 1; }
 
 STORAGE_UUID="$1"
-VFIO_IDS="${2:-}"
-ISO_CORES="${3:-}"
+shift
+VFIO_IDS="${1:-}"
+ISO_CORES="${2:-}"
+HUGEPAGE_COUNT="${3:-}"
+SLIM=false
 SIGN=false
-[ "${4:-}" = "--sign" ] && SIGN=true
+
+# parse flags in remaining arguments
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --slim) SLIM=true ;;
+        --sign) SIGN=true ;;
+    esac
+    shift
+done
 
 [ -n "$STORAGE_UUID" ] || { echo "quay-forge: error: storage_uuid is required" >&2; exit 1; }
 
@@ -28,37 +39,63 @@ die() { echo "quay-forge: error: $*" >&2; exit 1; }
 # align $1 up to the next 4096-byte boundary (POSIX arithmetic only)
 align_4k() { echo "$(( ($1 + 4095) / 4096 * 4096 ))"; }
 
+cleanup() {
+    rm -f /tmp/mkinitfs.quay.conf /tmp/initramfs.quay /tmp/quay-cmdline 2>/dev/null || true
+}
+trap cleanup EXIT INT TERM
+
 # ── dependencies ──────────────────────────────────────────────────────────────
 # most of these are pre-installed by install.sh; check before installing
 
 check_pkg() { command -v "$1" >/dev/null 2>&1; }
 
-check_pkg objcopy || apk add --quiet binutils >/dev/null 2>&1
+check_pkg objcopy || apk add --quiet binutils
 
-if ! check_pkg systemd-creds; then # systemd-creds is a proxy for efistub tools
-    if ! apk add --quiet systemd-efistub >/dev/null 2>&1; then
-        apk add --quiet systemd-boot >/dev/null 2>&1 \
-            || die "cannot install EFI stub package (tried systemd-efistub, systemd-boot)"
+if [ -z "$STUB" ]; then
+    echo "quay-forge: notice: linuxx64.efi.stub not found, attempting to install systemd-efistub"
+    if ! apk add --quiet systemd-efistub; then
+        apk add --quiet systemd-boot || die "cannot install EFI stub package"
     fi
+    # Search for it in standard locations
+    STUB=$(find /usr/lib/systemd/boot/efi -name "linuxx64.efi.stub" 2>/dev/null | head -n 1)
+    [ -z "$STUB" ] && STUB=$(find /usr/lib -name "linuxx64.efi.stub" 2>/dev/null | head -n 1)
 fi
+
+[ -n "$STUB" ] || die "linuxx64.efi.stub not found after installation attempts"
 
 if [ "$SIGN" = "true" ]; then
-    check_pkg sbsign || apk add --quiet sbsigntool >/dev/null 2>&1
-    check_pkg openssl || apk add --quiet openssl >/dev/null 2>&1
-    check_pkg cert-to-efi-sig-list || apk add --quiet efitools >/dev/null 2>&1
+    check_pkg sbsign || apk add --quiet sbsigntool
+    check_pkg openssl || apk add --quiet openssl
+    check_pkg cert-to-efi-sig-list || apk add --quiet efitools
 fi
 
-# ── locate build artefacts ────────────────────────────────────────────────────
 
-# look in standard Alpine systemd-efistub location first
-STUB=$(find /usr/lib/systemd/boot/efi -name "linuxx64.efi.stub" 2>/dev/null | head -n 1)
-[ -n "$STUB" ] || STUB=$(find /usr/lib -name "linuxx64.efi.stub" 2>/dev/null | head -n 1)
-[ -n "$STUB" ] || die "linuxx64.efi.stub not found; is systemd-efistub installed?"
+KERNEL=""
+for d in /boot /media/*/boot /run/mdev/*/boot; do
+    if [ -d "$d" ]; then
+        for f in "$d"/vmlinuz-*; do
+            if [ -f "$f" ]; then
+                KERNEL="$f"
+                break 2
+            fi
+        done
+    fi
+done
 
-KERNEL=$(ls /boot/vmlinuz-* 2>/dev/null | head -n 1)
-INITRD=$(ls /boot/initramfs-* 2>/dev/null | head -n 1)
-[ -n "$KERNEL" ] || die "no vmlinuz found in /boot/"
-[ -n "$INITRD" ] || die "no initramfs found in /boot/"
+INITRD=""
+for d in /boot /media/*/boot /run/mdev/*/boot; do
+    if [ -d "$d" ]; then
+        for f in "$d"/initramfs-*; do
+            if [ -f "$f" ]; then
+                INITRD="$f"
+                break 2
+            fi
+        done
+    fi
+done
+
+[ -n "$KERNEL" ] || die "no vmlinuz found. (checked /boot, /media/*/boot)"
+[ -n "$INITRD" ] || die "no initramfs found. (checked /boot, /media/*/boot)"
 
 echo "quay-forge: kernel  $KERNEL"
 echo "quay-forge: initrd  $INITRD"
@@ -73,10 +110,15 @@ CMDLINE="$CMDLINE copytoram=yes quiet"
 # 2MB hugepages are universally supported. 1GB pages require the pdpe1gb CPU
 # flag and silently do nothing without it, causing confusing QEMU mmap errors.
 CMDLINE="$CMDLINE hugepagesz=2M default_hugepagesz=2M"
+[ -n "$HUGEPAGE_COUNT" ] && CMDLINE="$CMDLINE hugepages=$HUGEPAGE_COUNT"
 
 # mitigations=auto without nosmt. nosmt disables hyperthreading system-wide,
 # which halves usable thread count and directly conflicts with isolcpus.
 CMDLINE="$CMDLINE mitigations=auto"
+
+# Security hardening: Slab merging, init on alloc/free, stack randomization, lookup lockdown
+CMDLINE="$CMDLINE slab_nomerge init_on_alloc=1 init_on_free=1 page_alloc.shuffle=1"
+CMDLINE="$CMDLINE randomize_kstack_offset=on vsyscall=none debugfs=off oops=panic lockdown=confidentiality"
 
 if grep -qi "AuthenticAMD" /proc/cpuinfo; then
     CMDLINE="$CMDLINE amd_iommu=on iommu=pt kvm_amd.nested=1"
@@ -85,7 +127,7 @@ else
 fi
 
 [ -n "$ISO_CORES" ] && CMDLINE="$CMDLINE isolcpus=$ISO_CORES nohz_full=$ISO_CORES rcu_nocbs=$ISO_CORES"
-[ -n "$VFIO_IDS"  ] && CMDLINE="$CMDLINE vfio-pci.ids=$VFIO_IDS rd.driver.pre=vfio_pci"
+[ -n "$VFIO_IDS"  ] && CMDLINE="$CMDLINE vfio-pci.ids=$VFIO_IDS"
 
 # modloop is copied to the storage root by install.sh; the alpine initramfs
 # mounts alpine_dev then finds it there.
@@ -93,6 +135,31 @@ CMDLINE="$CMDLINE modloop=/modloop-lts modloop_verify=no"
 
 echo "quay-forge: cmdline: $CMDLINE"
 printf '%s' "$CMDLINE" > /tmp/quay-cmdline
+
+# ── initramfs features ────────────────────────────────────────────────────────
+
+MKINITFS_CONF="/tmp/mkinitfs.quay.conf"
+# default features from install.sh
+FEATURES="vfio vfio_pci vfio_iommu_type1 vfio_virqfd kvm kvm_amd kvm_intel base scsi ahci nvme usb-storage ext4 bridge tun"
+COMPRESSION="zstd"
+
+if [ "$SLIM" = "true" ]; then
+    echo "quay-forge: slim mode active — optimizing for size"
+    COMPRESSION="xz"
+    # prune features to absolute minimum for boot
+    FEATURES="base scsi ext4"
+fi
+
+cat > "$MKINITFS_CONF" << EOF
+features="$FEATURES"
+compression="$COMPRESSION"
+EOF
+
+# regenerate initrd if slim or if we need to ensure consistency
+NEW_INITRD="/tmp/initramfs.quay"
+echo "quay-forge: regenerating initramfs (compression=$COMPRESSION)..."
+mkinitfs -c "$MKINITFS_CONF" -o "$NEW_INITRD" || die "mkinitfs failed"
+INITRD="$NEW_INITRD"
 
 # ── section VMA layout ────────────────────────────────────────────────────────
 #
@@ -152,9 +219,11 @@ if [ "$SIGN" = "true" ]; then
     sbsign --key "$DB_KEY" --cert "$DB_CRT" --output "$FINAL_OUT" "$UNSIGNED_OUT" \
         || die "sbsign failed"
 
-    sbverify --cert "$DB_CRT" "$FINAL_OUT" >/dev/null 2>&1 \
-        && echo "quay-forge: signature ok" \
-        || die "signature verification failed"
+    if sbverify --cert "$DB_CRT" "$FINAL_OUT" >/dev/null 2>&1; then
+        echo "quay-forge: signature ok"
+    else
+        die "signature verification failed"
+    fi
 
     rm -f "$UNSIGNED_OUT"
 else
