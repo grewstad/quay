@@ -80,11 +80,17 @@ The script will prompt for the following configuration:
 **Hostname**
   Hostname for the system (used for SSH and overlay tarball naming).
 
-**Root password**
-  Initial root password (SSH key auth is recommended post-install).
-
 **SSH public key**
   Paste your public key or let the installer generate a keypair.
+
+### direct-to-gpu installation
+Quay is built for physical console users. You can install Ubuntu directly onto your monitor using your GPU:
+1. Boot the installed Quay host.
+2. Log in on the physical monitor.
+3. Run the installer script: `sh templates/ubuntu-vm-install.sh`.
+4. **The monitor will switch from text to the Ubuntu GUI installer.**
+5. Complete the setup and shut down the VM.
+6. Launch for production: `sh templates/ubuntu-vm-run.sh`.
 
 ### forge-uki.sh
 

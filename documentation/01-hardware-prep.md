@@ -21,10 +21,16 @@ Configure the following in UEFI setup (exact labels vary by vendor):
 **Secure Boot**
     Leave in current state; the installer will prompt whether to enable it.
 
-If using Secure Boot with custom keys, check whether the firmware supports
-Setup Mode or a "Reset Secure Boot Keys" option. This allows automatic key
 enrollment during installation. Without it, keys must be enrolled manually
 after boot via the firmware UI or UEFI shell.
+
+### Multi-Monitor Setup (iGPU + dGPU)
+The ideal Quay setup uses an **iGPU** (integrated) for the host console and a **dGPU** (discrete) for VM passthrough. This allows you to manage the host on one monitor while using the VM on another.
+
+1. **Monitor A**: Connect to motherboard (HDMI/DP). This remains your text-only Alpine console.
+2. **Monitor B**: Connect to discrete GPU. This becomes your Ubuntu VM display.
+
+**BIOS Requirement**: Set "Primary Graphics Adapter" to **Internal/iGPU**. This ensures the host console doesn't "claim" the discrete card, leaving it clean for VM use.
 
 ### iommu verification
 After enabling IOMMU in firmware and booting any Linux:
