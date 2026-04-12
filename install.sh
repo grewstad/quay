@@ -123,7 +123,8 @@ if [ -z "$DONE_STEP_PACKAGES" ]; then
         util-linux parted \
         tcpdump bind-tools \
         shadow tmux uuidgen \
-        binutils efitools openssl
+        binutils systemd-efistub efitools \
+        qemu-ui-sdl mesa-dri-gallium mesa-va-gallium
     # EFI stub package name differs between Alpine versions
     apk add --quiet systemd-efistub 2>/dev/null \
         || apk add --quiet systemd-boot 2>/dev/null \

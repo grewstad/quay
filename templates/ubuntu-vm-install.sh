@@ -1,10 +1,10 @@
 #!/bin/sh
 # ubuntu-vm-install.sh
 # create a new Ubuntu VM image, download the latest Ubuntu Server ISO,
-# and launch the installer over VNC.
+# and launch the installer directly onto your GPU or Local Monitor.
 #
-# override any variable via the environment:
-#   MEM=8G CORES=2 sh ubuntu-vm-install.sh
+# Override any variable via the environment, e.g.:
+#   USE_GPU=1 GPU_ID=01:00.0 GPU_AUDIO_ID=01:00.1 sh ubuntu-vm-install.sh
 #
 # https://github.com/grewstad/quay
 set -e
@@ -19,6 +19,12 @@ MEM="${MEM:-12G}"
 CORES="${CORES:-4}"
 THREADS="${THREADS:-2}"
 BRIDGE="${BRIDGE:-br0}"
+
+# GPU / Display settings
+USE_GPU="${USE_GPU:-0}"
+GPU_ID="${GPU_ID:-}"
+GPU_AUDIO_ID="${GPU_AUDIO_ID:-}"
+GUI_MODE="${GUI_MODE:-sdl}" # Default to local monitor if not using GPU
 VNC_PORT="${VNC_PORT:-127.0.0.1:0}"
 
 die() { echo "ubuntu-vm-install: error: $*" >&2; exit 1; }
@@ -33,12 +39,11 @@ if [ ! -f "$ISO_PATH" ]; then
     elif command -v curl >/dev/null 2>&1; then
         curl -fL -o "$ISO_PATH" "$ISO_URI" || die "curl failed"
     else
-        die "wget or curl is required to download the ISO"
+        die "wget or curl is required"
     fi
 fi
-[ -f "$ISO_PATH" ] || die "ISO not found at $ISO_PATH after download"
 
-# verify ISO checksum — protect against MITM and corrupt downloads
+# verify checksum
 echo "ubuntu-vm-install: verifying ISO checksum..."
 if command -v wget >/dev/null 2>&1; then
     wget -q -O /tmp/ubuntu-SHA256SUMS "$ISO_SHA256_URI" || die "cannot download SHA256SUMS"
@@ -46,10 +51,8 @@ elif command -v curl >/dev/null 2>&1; then
     curl -fsSL -o /tmp/ubuntu-SHA256SUMS "$ISO_SHA256_URI" || die "cannot download SHA256SUMS"
 fi
 ISO_BASENAME=$(basename "$ISO_PATH")
-grep "$ISO_BASENAME" /tmp/ubuntu-SHA256SUMS | sha256sum -c - \
-    || die "ISO checksum mismatch — file may be corrupt or tampered"
+grep "$ISO_BASENAME" /tmp/ubuntu-SHA256SUMS | sha256sum -c - || die "checksum mismatch"
 rm -f /tmp/ubuntu-SHA256SUMS
-echo "ubuntu-vm-install: checksum ok"
 
 if [ -f "$DISK_PATH" ]; then
     echo "ubuntu-vm-install: disk image already exists at $DISK_PATH"
@@ -61,29 +64,34 @@ if [ -f "$DISK_PATH" ]; then
     esac
 fi
 
-qemu-img create -f qcow2 "$DISK_PATH" "$DISK_SIZE" \
-    || die "qemu-img create failed"
+qemu-img create -f qcow2 "$DISK_PATH" "$DISK_SIZE" || die "qemu-img create failed"
 
-TOTAL_VCPUS=$(( CORES * THREADS ))
+# build QEMU display/GPU arguments
+if [ "$USE_GPU" = "1" ]; then
+    [ -n "$GPU_ID" ] || die "GPU_ID is not set"
+    [ -n "$GPU_AUDIO_ID" ] || die "GPU_AUDIO_ID is not set"
+    echo "ubuntu-vm-install: installing via physical GPU ($GPU_ID)"
+    DISPLAY_OPTS="-display none"
+    GPU_OPTS="-device vfio-pci,host=$GPU_ID -device vfio-pci,host=$GPU_AUDIO_ID"
+else
+    echo "ubuntu-vm-install: installing via $GUI_MODE (Local Monitor/VNC)"
+    # If GUI_MODE is 'vnc', append the port. If 'sdl', just use sdl.
+    if [ "$GUI_MODE" = "vnc" ]; then
+        DISPLAY_OPTS="-display vnc=$VNC_PORT"
+    else
+        DISPLAY_OPTS="-display $GUI_MODE"
+    fi
+    GPU_OPTS="-vga virtio"
+fi
 
 cat << EOF
 ubuntu-vm-install: ready
   image:   $DISK_PATH
   iso:     $ISO_PATH
   memory:  $MEM
-  vcpus:   $TOTAL_VCPUS (${CORES} cores x ${THREADS} threads)
-  network: bridge $BRIDGE
-  display: VNC on $VNC_PORT
-           connect with: vncviewer $VNC_PORT
-
-once the installer finishes, use templates/ubuntu-vm-run.sh to boot the VM.
+  display: $DISPLAY_OPTS
 EOF
 
-# note on -sandbox and -runas:
-# -runas drops privileges to vmrunner after QEMU initialises devices.
-# -sandbox elevateprivileges=deny blocks the setuid/setgid syscalls that
-# -runas requires. omit elevateprivileges=deny when -runas is present.
-# the remaining sandbox flags (obsolete, spawn, resourcecontrol) are safe.
 qemu-system-x86_64 \
     -enable-kvm \
     -machine q35,accel=kvm \
@@ -98,7 +106,8 @@ qemu-system-x86_64 \
     -device qemu-xhci,id=xhci \
     -device usb-kbd \
     -device usb-mouse \
-    -display "vnc=$VNC_PORT" \
+    $GPU_OPTS \
+    $DISPLAY_OPTS \
     -monitor "unix:/run/vms/${VM_NAME}.sock,server,nowait" \
     -pidfile "/run/vms/${VM_NAME}.pid" \
     -sandbox on,obsolete=deny,spawn=deny,resourcecontrol=deny \
