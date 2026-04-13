@@ -2,13 +2,13 @@
 # forge-uki.sh — quay UKI builder
 # fuses vmlinuz + initramfs + cmdline into a signed or unsigned quay.efi
 #
-# usage: forge-uki.sh <storage_uuid> [vfio_ids] [iso_cores] [hugepage_count] [--slim] [--sign]
+# usage: forge-uki.sh <storage_uuid> [vfio_ids] [iso_cores] [hugepage_count] [--sign]
 #
 # https://github.com/grewstad/quay
 set -e
 
 [ $# -ge 1 ] || {
-    echo "quay-forge: usage: forge-uki.sh <storage_uuid> [vfio_ids] [iso_cores] [hp_count] [--slim] [--sign]" >&2
+    echo "quay: uki: usage: forge-uki.sh <storage_uuid> [vfio_ids] [iso_cores] [hp_count] [--sign]" >&2
     exit 1
 }
 
@@ -17,24 +17,20 @@ shift
 VFIO_IDS="${1:-}"
 ISO_CORES="${2:-}"
 HUGEPAGE_COUNT="${3:-}"
-SLIM=false
-SIGN=false
-
 while [ $# -gt 0 ]; do
     case "$1" in
-        --slim) SLIM=true ;;
         --sign) SIGN=true ;;
     esac
     shift
 done
 
-[ -n "$STORAGE_UUID" ] || { echo "quay-forge: error: storage_uuid is required" >&2; exit 1; }
+[ -n "$STORAGE_UUID" ] || { echo "quay: uki: error: storage_uuid is required" >&2; exit 1; }
 
 SB_DIR="/mnt/storage/secureboot"
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
-die() { echo "quay-forge: error: $*" >&2; exit 1; }
+die() { echo "quay: uki: error: $*" >&2; exit 1; }
 
 align_4k() { echo "$(( ($1 + 4095) / 4096 * 4096 ))"; }
 
@@ -52,10 +48,10 @@ STUB=$(find /usr/lib/systemd/boot/efi -name "linuxx64.efi.stub" 2>/dev/null | he
 [ -z "$STUB" ] && STUB=$(find /usr/lib -name "linuxx64.efi.stub" 2>/dev/null | head -1)
 
 if [ -z "$STUB" ]; then
-    echo "quay-forge: EFI stub not found, attempting to install"
+    echo "quay: uki: pkg: installing efi stub"
     apk add --quiet systemd-efistub 2>/dev/null \
         || apk add --quiet systemd-boot 2>/dev/null \
-        || die "cannot install EFI stub package (tried systemd-efistub, systemd-boot)"
+        || die "cannot install efi stub package"
     STUB=$(find /usr/lib -name "linuxx64.efi.stub" 2>/dev/null | head -1)
 fi
 [ -n "$STUB" ] || die "linuxx64.efi.stub not found after installation attempt"
@@ -86,13 +82,13 @@ done
 [ -n "$KERNEL" ] || die "no vmlinuz found (searched /boot, /media/*/boot)"
 [ -n "$INITRD" ] || die "no initramfs found (searched /boot, /media/*/boot)"
 
-echo "quay-forge: kernel  $KERNEL"
-echo "quay-forge: initrd  $INITRD"
-echo "quay-forge: stub    $STUB"
+echo "quay: uki: kern: $KERNEL"
+echo "quay: uki: initrd: $INITRD"
+echo "quay: uki: stub: $STUB"
 
 # ── cmdline ───────────────────────────────────────────────────────────────────
 
-CMDLINE="modules=loop,squashfs,sd-mod,usb-storage,ext4"
+CMDLINE="modules=loop,squashfs,sd-mod,usb-storage,xfs"
 CMDLINE="$CMDLINE alpine_dev=UUID=${STORAGE_UUID}"
 CMDLINE="$CMDLINE copytoram=yes quiet"
 
@@ -135,23 +131,12 @@ fi
 # alpine_dev then finds it there at boot.
 CMDLINE="$CMDLINE modloop=/modloop-lts modloop_verify=no"
 
-echo "quay-forge: cmdline: $CMDLINE"
+echo "quay: uki: cmdline: $CMDLINE"
 printf '%s' "$CMDLINE" > /tmp/quay-cmdline
 
-# ── initramfs ─────────────────────────────────────────────────────────────────
-# vfio is not a built-in mkinitfs feature token — it requires a .modules file
-# in /etc/mkinitfs/features.d/ created by install.sh (or manually).
-# Unknown tokens in features="" are silently ignored by mkinitfs.
-# Slim mode changes compression only; the feature set is never pruned.
-
 MKINITFS_CONF="/tmp/mkinitfs.quay.conf"
-FEATURES="vfio kvm base scsi ahci nvme usb-storage ext4"
+FEATURES="vfio kvm base scsi ahci nvme usb-storage xfs"
 COMPRESSION="zstd"
-
-if [ "$SLIM" = "true" ]; then
-    echo "quay-forge: slim mode — xz compression (feature set unchanged)"
-    COMPRESSION="xz"
-fi
 
 cat > "$MKINITFS_CONF" << EOF
 features="$FEATURES"
@@ -159,7 +144,7 @@ compression="$COMPRESSION"
 EOF
 
 NEW_INITRD="/tmp/initramfs.quay"
-echo "quay-forge: building initramfs (compression=$COMPRESSION)..."
+echo "quay: uki: initrd: building (compression=$COMPRESSION)..."
 mkinitfs -c "$MKINITFS_CONF" -o "$NEW_INITRD" || die "mkinitfs failed"
 INITRD="$NEW_INITRD"
 
@@ -180,7 +165,7 @@ VMA_CMDLINE=$(( VMA_OSREL  + $(align_4k "$OSREL_SIZE") ))
 VMA_LINUX=$(( VMA_CMDLINE  + $(align_4k "$CMDL_SIZE")  + 1048576 ))
 VMA_INITRD=$(( VMA_LINUX   + $(align_4k "$KERN_SIZE")  + 1048576 ))
 
-printf "quay-forge: layout: .osrel=0x%x .cmdline=0x%x .linux=0x%x .initrd=0x%x\n" \
+printf "quay: uki: layout: .osrel=0x%x .cmdline=0x%x .linux=0x%x .initrd=0x%x\n" \
     $VMA_OSREL $VMA_CMDLINE $VMA_LINUX $VMA_INITRD
 
 # ── fuse ─────────────────────────────────────────────────────────────────────
@@ -189,7 +174,7 @@ UNSIGNED_OUT="/tmp/quay.efi.unsigned"
 FINAL_OUT="/tmp/quay.efi"
 rm -f "$UNSIGNED_OUT" "$FINAL_OUT"
 
-echo "quay-forge: fusing..."
+echo "quay: uki: fusing image"
 objcopy \
     --add-section .osrel="/etc/os-release"     --change-section-vma ".osrel=$VMA_OSREL" \
     --add-section .cmdline="/tmp/quay-cmdline" --change-section-vma ".cmdline=$VMA_CMDLINE" \
@@ -204,13 +189,12 @@ if [ "$SIGN" = "true" ]; then
     DB_KEY="$SB_DIR/db.key"
     DB_CRT="$SB_DIR/db.crt"
 
-    # db key should already exist — install.sh generates the full PK/KEK/db
-    # chain before calling forge-uki. When called standalone without the chain,
-    # generate a self-signed db cert and warn the user.
+    # db key should already exist if the user has a hardened setup.
+    # When called standalone without existing keys, generate a
+    # standalone self-signed db cert and warn the user.
     if [ ! -f "$DB_KEY" ] || [ ! -f "$DB_CRT" ]; then
-        echo "quay-forge: warning: no db key found at $SB_DIR"
-        echo "quay-forge: generating standalone self-signed db cert"
-        echo "quay-forge: for a full PK/KEK/db chain, run install.sh"
+        echo "quay: uki: warn: no db key found at $SB_DIR"
+        echo "quay: uki: cert: generating self-signed db cert"
         mkdir -p "$SB_DIR"
         chmod 700 "$SB_DIR"
         openssl req -newkey rsa:4096 -nodes -keyout "$DB_KEY" \
@@ -221,12 +205,12 @@ if [ "$SIGN" = "true" ]; then
         chmod 600 "$DB_KEY"
     fi
 
-    echo "quay-forge: signing with $DB_CRT"
+    echo "quay: uki: cert: signing with $DB_CRT"
     sbsign --key "$DB_KEY" --cert "$DB_CRT" --output "$FINAL_OUT" "$UNSIGNED_OUT" \
         || die "sbsign failed"
 
     if sbverify --cert "$DB_CRT" "$FINAL_OUT" >/dev/null 2>&1; then
-        echo "quay-forge: signature ok"
+        echo "quay: uki: cert: signature ok"
     else
         die "signature verification failed"
     fi
@@ -234,7 +218,7 @@ if [ "$SIGN" = "true" ]; then
     rm -f "$UNSIGNED_OUT"
 else
     mv "$UNSIGNED_OUT" "$FINAL_OUT"
-    echo "quay-forge: unsigned — secure boot will reject this image if active"
+    echo "quay: uki: warn: unsigned — secure boot will reject this"
 fi
 
-printf "quay-forge: done  %s  (%d bytes)\n" "$FINAL_OUT" "$(stat -c%s "$FINAL_OUT")"
+printf "quay: uki: done: %s (%d bytes)\n" "$FINAL_OUT" "$(stat -c%s "$FINAL_OUT")"
