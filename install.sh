@@ -178,6 +178,7 @@ if [ "$STORAGE_FSTYPE" != "xfs" ]; then
     if ask_yn "storage: $STORAGE_PART not formatted as XFS. format now?"; then
         # Ensure node is present before formatting
         [ ! -b "$STORAGE_PART" ] && mdev -s && sleep 1
+        [ ! -b "$STORAGE_PART" ] && sleep 1
         echo "storage: xfs $STORAGE_PART"
         mkfs.xfs -f -L QUAY_STORAGE -m reflink=1 "$STORAGE_PART" || die "failed to format XFS"
         STORAGE_FSTYPE="xfs"
@@ -189,6 +190,10 @@ if [ "$STORAGE_FSTYPE" != "xfs" ]; then
 fi
 
 mdev -s
+# Final wait for nodes before UUID extraction
+[ ! -b "$EFI_PART" ] && sleep 1
+[ ! -b "$STORAGE_PART" ] && sleep 1
+
 EFI_UUID=$(blkid -s UUID -o value "$EFI_PART")
 STORAGE_UUID=$(blkid -s UUID -o value "$STORAGE_PART")
 
