@@ -94,11 +94,15 @@ To sign the UKI, add `--sign`. The first time, a self-signed db keypair is gener
 
 ---
 
-## Automated installs
-
-Set `QUAY_AUTO=1` to skip all prompts and use defaults or environment variables. Useful for scripted setups and testing:
-
 ```sh
+# 1. Establish networking
+ip link set eth0 up && udhcpc -n eth0
+
+# 2. Retrieve & Execute
+apk add git
+git clone https://github.com/grewstad/quay /tmp/quay
+cd /tmp/quay
+
 QUAY_AUTO=1 \
 EFI_PART=/dev/vda1 \
 STORAGE_PART=/dev/vda2 \
