@@ -147,6 +147,8 @@ if [ ! -b "$EFI_PART" ]; then
     mdev -s
     sleep 2
     echo "disk: format"
+    # Ensure nodes are present before formatting
+    mdev -s && sleep 1
     mkfs.fat -F32 "$EFI_PART"
     mkfs.xfs -f -L QUAY_STORAGE -m reflink=1 "$STORAGE_PART"
     sleep 1
@@ -174,6 +176,8 @@ STORAGE_FSTYPE=$(blkid -s TYPE -o value "$STORAGE_PART" 2>/dev/null || true)
 
 if [ "$STORAGE_FSTYPE" != "xfs" ]; then
     if ask_yn "storage: $STORAGE_PART not formatted as XFS. format now?"; then
+        # Ensure node is present before formatting
+        [ ! -b "$STORAGE_PART" ] && mdev -s && sleep 1
         echo "storage: xfs $STORAGE_PART"
         mkfs.xfs -f -L QUAY_STORAGE -m reflink=1 "$STORAGE_PART" || die "failed to format XFS"
         STORAGE_FSTYPE="xfs"
