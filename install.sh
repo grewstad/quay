@@ -383,8 +383,9 @@ cp /etc/passwd "$_staging/etc/"
 cp /etc/hostname "$_staging/etc/"
 mkdir -p "$_staging/etc/apk"
 cp /etc/apk/world "$_staging/etc/apk/"
-# Use official mirrors for online graduation
-cat /etc/apk/repositories > "$_staging/etc/apk/repositories"
+# Use local repository first, then official mirrors
+echo "/mnt/storage/apks/x86_64" > "$_staging/etc/apk/repositories"
+cat /etc/apk/repositories >> "$_staging/etc/apk/repositories"
 
 cp /etc/network/interfaces "$_staging/etc/"
 mkdir -p "$_staging/etc/sysctl.d"
