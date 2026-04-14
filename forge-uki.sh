@@ -88,7 +88,7 @@ echo "quay: uki: stub: $STUB"
 
 # ── cmdline ───────────────────────────────────────────────────────────────────
 
-CMDLINE="modules=loop,squashfs,sd-mod,usb-storage,xfs"
+CMDLINE="modules=loop,squashfs,sd-mod,usb-storage,xfs,overlay"
 CMDLINE="$CMDLINE alpine_dev=UUID=${STORAGE_UUID} alpine_repo=/mnt/storage/apks"
 CMDLINE="$CMDLINE copytoram=yes quiet console=tty0 console=ttyS0,115200"
 
@@ -135,7 +135,7 @@ echo "quay: uki: cmdline: $CMDLINE"
 printf '%s' "$CMDLINE" > /tmp/quay-cmdline
 
 MKINITFS_CONF="/tmp/mkinitfs.quay.conf"
-FEATURES="vfio kvm base scsi ahci nvme usb-storage xfs"
+FEATURES="vfio kvm base squashfs scsi ahci nvme usb-storage xfs"
 COMPRESSION="zstd"
 
 cat > "$MKINITFS_CONF" << EOF
