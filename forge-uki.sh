@@ -90,7 +90,7 @@ echo "quay: uki: stub: $STUB"
 
 CMDLINE="modules=loop,squashfs,sd-mod,usb-storage,xfs"
 CMDLINE="$CMDLINE alpine_dev=UUID=${STORAGE_UUID}"
-CMDLINE="$CMDLINE copytoram=yes quiet"
+CMDLINE="$CMDLINE copytoram=yes quiet console=tty0 console=ttyS0,115200"
 
 # 2MB hugepages are universally supported.
 # 1GB pages (hugepagesz=1G) require the pdpe1gb CPU flag and silently do

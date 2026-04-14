@@ -239,6 +239,13 @@ sh "$QUAY_DIR/forge-uki.sh" "$STORAGE_UUID" "$VFIO_IDS" "$ISO_CORES" "$HUGEPAGE_
 mkdir -p /mnt/target_boot/EFI/Linux
 cp /tmp/quay.efi /mnt/target_boot/EFI/Linux/quay.efi
 
+# Copy modloop to storage for boot use
+if [ -f "/media/cdrom/boot/modloop-lts" ]; then
+    cp /media/cdrom/boot/modloop-lts /mnt/storage/modloop-lts
+elif [ -f "/modloop-lts" ]; then
+    cp /modloop-lts /mnt/storage/modloop-lts
+fi
+
 # Removable path for universal boot compatibility
 mkdir -p /mnt/target_boot/EFI/BOOT
 cp /tmp/quay.efi /mnt/target_boot/EFI/BOOT/BOOTX64.EFI

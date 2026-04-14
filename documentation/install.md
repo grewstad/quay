@@ -26,6 +26,34 @@
 
 ---
 
+## Disk Preparation
+
+Before running the installer, your disk must be properly partitioned. Using `parted` is recommended.
+
+1. Establish networking and enable community repositories (to install `parted`):
+   ```sh
+   setup-interfaces -a
+   rc-service networking start
+   setup-apkrepos -1
+   apk update
+   apk add parted dosfstools e2fsprogs
+   ```
+
+2. Partition the target disk (assuming `/dev/vda`. **WARNING:** this destroys all data):
+   ```sh
+   parted -a optimal -s /dev/vda mklabel gpt \
+     mkpart ESP fat32 1MiB 513MiB set 1 boot on \
+     mkpart primary xfs 513MiB 100%
+   ```
+
+3. Format the ESP (EFI System Partition):
+   ```sh
+   mkfs.fat -F32 /dev/vda1
+   ```
+*(The storage partition `/dev/vda2` will be formatted as XFS automatically by the installer).*
+
+---
+
 ## What happens
 
 1. Repos are set to `main` and `community` for the running Alpine version
