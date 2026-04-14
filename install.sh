@@ -381,11 +381,17 @@ mkdir -p "$_staging/etc" "$_staging/root"
 cp /etc/shadow "$_staging/etc/"
 cp /etc/passwd "$_staging/etc/"
 cp /etc/hostname "$_staging/etc/"
+[ -f /etc/fstab ] && cp /etc/fstab "$_staging/etc/"
 mkdir -p "$_staging/etc/apk"
 cp /etc/apk/world "$_staging/etc/apk/"
 # Use local repository first, then official mirrors
 echo "/mnt/storage/apks/x86_64" > "$_staging/etc/apk/repositories"
 cat /etc/apk/repositories >> "$_staging/etc/apk/repositories"
+
+# Ensure storage is mounted on boot for localized dependency fulfillment
+mkdir -p "$_staging/etc"
+_storage_uuid=$(blkid -s UUID -o value "$STORAGE_PART")
+echo "UUID=$_storage_uuid /mnt/storage xfs defaults 0 0" > "$_staging/etc/fstab"
 
 cp /etc/network/interfaces "$_staging/etc/"
 mkdir -p "$_staging/etc/sysctl.d"
