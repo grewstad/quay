@@ -1,53 +1,69 @@
-GETTING-STARTED(7)         Quay Manual         GETTING-STARTED(7)
+# getting started
 
-NAME
-    getting-started - initial guest deployment and host management
+---
 
-SYNOPSIS
-    1. Boot Quay substrate.
-    2. Initialize storage and networking.
-    3. Deploy local VM templates.
+## SYNOPSIS
 
-DESCRIPTION
-    This guide outlines the authoritative workflow for launching your
-    first virtual machine on a fresh Quay hypervisor installation.
+1. Boot Quay substrate.
+2. Initialize storage and networking.
+3. Deploy guest VM templates.
 
-    Quay is a RAM-resident system. Persistence is managed via the storage
-    partition (XFS) and the Alpine Backup Utility (LBU).
+---
 
-PROCEDURE
-    1. Mount persistent storage:
-       # mount /dev/vda2 /mnt/storage
+## DESCRIPTION
 
-    2. Initialize networking (if required):
-       # ip link add br0 type bridge
-       # ip link set br0 up
+Quay is a RAM-resident hypervisor primitive. Persistence is managed via the dedicated storage partition (XFS) and the Alpine Backup Utility (LBU). This guide covers launching your first guest VM.
 
-    3. Fetch installation media:
-       # mkdir -p /mnt/storage/iso
-       # wget -P /mnt/storage/iso http://repo-default.voidlinux.org/live/current/void-live-x86_64-20250202-base.iso
+---
 
-    4. Launch guest via template:
-       # cd templates
-       # ISO=/mnt/storage/iso/void-live-x86_64-20250202-base.iso sh void.sh
+## PROCEDURE
 
-GUEST MANAGEMENT
-    The included templates provide sensible defaults for minimalist VM
-    operation. Configuration is handled primarily via environment
-    variables (MEM, CPUS, ISO, DISK).
+### 1. Mount persistent storage
+Ensure the storage partition is mounted to `/mnt/storage`:
+```sh
+mount /dev/nvme0n1p2 /mnt/storage
+```
 
-    Access guest consoles via the VNC endpoint (127.0.0.1:5900) or
-    the serial terminal if -nographic is specified in the template.
+### 2. Initialize networking
+Setup the default bridge if not already present:
+```sh
+ip link add br0 type bridge
+ip link set br0 up
+```
 
-PERSISTENCE
-    To persist host configuration changes between reboots:
-    1. Add files to backup list:
-       # lbu include /etc/network/interfaces
+### 3. Fetch installation media
+Retrieve your guest installer ISO:
+```sh
+mkdir -p /mnt/storage/iso
+wget -P /mnt/storage/iso http://repo-default.voidlinux.org/live/current/void-live-x86_64-20250202-base.iso
+```
 
-    2. Commit changes to storage:
-       # lbu commit -d /mnt/storage
+### 4. Launch guest via template
+Run the guest template with the ISO path:
+```sh
+cd /tmp/quay/templates
+ISO=/mnt/storage/iso/void-live-x86_64-20250202-base.iso sh void.sh
+```
 
-SEE ALSO
-    quay(7), install(7), persistence(7)
+---
 
-Quay 1.0.0                  2026-04-14           GETTING-STARTED(7)
+## PERSISTENCE
+
+To persist host-level configuration changes (like networking tweaks or custom scripts) between reboots:
+
+1. Add files to the backup list:
+   ```sh
+   lbu include /etc/network/interfaces
+   ```
+
+2. Commit changes to storage:
+   ```sh
+   lbu commit -d /mnt/storage
+   ```
+
+---
+
+## NEXT STEPS
+
+- See [hardare.md](hardware.md) for IOMMU and CPU isolation.
+- See [install.md](install.md) for UKI rebuilding and signing.
