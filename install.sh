@@ -170,6 +170,8 @@ _efi_dev=$(echo "$EFI_PART" | sed -E 's/p?[0-9]+$//')
 _efi_num=$(echo "$EFI_PART" | grep -oE '[0-9]+$')
 if [ -n "$_efi_dev" ] && [ -n "$_efi_num" ]; then
     sfdisk --part-type "$_efi_dev" "$_efi_num" C12A7328-F81F-11D2-BA4B-00A0C93EC93B >/dev/null 2>&1 || true
+    mdev -s
+    sleep 2
 fi
 
 STORAGE_FSTYPE=$(blkid -s TYPE -o value "$STORAGE_PART" 2>/dev/null || true)
