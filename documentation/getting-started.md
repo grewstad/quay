@@ -1,44 +1,42 @@
 # getting started
 
----
-
-## SYNOPSIS
-
-1. Boot Quay substrate.
-2. Initialize storage and networking.
-3. Deploy guest VM templates.
+Quay is a RAM-resident hypervisor. Host state is managed via the storage partition (XFS) and the Alpine Backup Utility (LBU).
 
 ---
 
-## DESCRIPTION
+## Host environment
 
-Quay is a RAM-resident hypervisor primitive. Persistence is managed via the dedicated storage partition (XFS) and the Alpine Backup Utility (LBU). This guide covers launching your first guest VM.
+### Partitions
 
----
+Manual partitioning is recommended for complex setups. See [install.md](install.md) for the automated 1-pass deployment vs manual preparation.
 
-## PROCEDURE
-
-### 1. Mount persistent storage
-Ensure the storage partition is mounted to `/mnt/storage`:
 ```sh
-mount /dev/nvme0n1p2 /mnt/storage
+# Example GPT layout
+parted /dev/sda mklabel gpt
+parted /dev/sda mkpart ESP fat32 1MiB 513MiB
+parted /dev/sda set 1 esp on
+parted /dev/sda mkpart storage xfs 513MiB 100%
 ```
 
-### 2. Initialize networking
-Setup the default bridge if not already present:
+### Networking
+Setup the bridge if you didn't configure it during installation:
 ```sh
 ip link add br0 type bridge
 ip link set br0 up
 ```
 
-### 3. Fetch installation media
-Retrieve your guest installer ISO:
+---
+
+## Guest deployment
+
+### Fetch media
+Retrieve your guest installer ISO to the storage partition:
 ```sh
 mkdir -p /mnt/storage/iso
 wget -P /mnt/storage/iso http://repo-default.voidlinux.org/live/current/void-live-x86_64-20250202-base.iso
 ```
 
-### 4. Launch guest via template
+### Launch guest
 Run the guest template with the ISO path:
 ```sh
 cd /tmp/quay/templates
@@ -47,9 +45,9 @@ ISO=/mnt/storage/iso/void-live-x86_64-20250202-base.iso sh void.sh
 
 ---
 
-## PERSISTENCE
+## Persistence
 
-To persist host-level configuration changes (like networking tweaks or custom scripts) between reboots:
+To preserve host configuration changes across reboots:
 
 1. Add files to the backup list:
    ```sh
@@ -60,10 +58,3 @@ To persist host-level configuration changes (like networking tweaks or custom sc
    ```sh
    lbu commit -d /mnt/storage
    ```
-
----
-
-## NEXT STEPS
-
-- See [hardare.md](hardware.md) for IOMMU and CPU isolation.
-- See [install.md](install.md) for UKI rebuilding and signing.
