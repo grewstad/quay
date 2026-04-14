@@ -315,11 +315,14 @@ EOF
 
 # Seed the world file with hypervisor dependencies
 echo "pkg: seed"
-for pkg in qemu-system-x86_64 qemu-img xfsprogs bridge-utils bash wget curl; do
+for pkg in qemu-system-x86_64 qemu-img xfsprogs bridge-utils bash zsh git curl wget rsync vim less; do
     if ! grep -q "^$pkg$" /etc/apk/world; then
         echo "$pkg" >> /etc/apk/world
     fi
 done
+
+# Set Zsh as default shell for root
+chsh -s /bin/zsh root
 
 # Final identity check
 echo "$NEW_HOSTNAME" > /etc/hostname
@@ -331,7 +334,25 @@ hostname "$NEW_HOSTNAME"
 echo "pkg: templates"
 cp -r "$QUAY_DIR/templates" /root/
 cp "$QUAY_DIR/templates/void.sh" /root/void.sh
+cp "$QUAY_DIR/documentation/getting-started.md" /root/getting-started.md
 chmod +x /root/void.sh
+
+# Configure persistent services
+echo "sys: services"
+rc-update add devfs sysinit
+rc-update add dmesg sysinit
+rc-update add mdev sysinit
+rc-update add hwdrivers sysinit
+rc-update add modloop sysinit
+rc-update add networking boot
+rc-update add sshd boot
+rc-update add hostname boot
+rc-update add sysctl boot
+rc-update add bootmisc boot
+rc-update add syslog boot
+rc-update add mount-ro shutdown
+rc-update add killprocs shutdown
+rc-update add savecache shutdown
 
 # Assemble Persistence Payload (Clinical)
 _staging=/tmp/quay_staging
@@ -355,6 +376,10 @@ cp -r /root/templates "$_staging/root/"
 echo "kvm" >> "$_staging/etc/modules"
 grep -qi "AuthenticAMD" /proc/cpuinfo && echo "kvm_amd" >> "$_staging/etc/modules"
 grep -qi "GenuineIntel" /proc/cpuinfo && echo "kvm_intel" >> "$_staging/etc/modules"
+
+# Persist OpenRC runlevels
+cp -r /etc/runlevels "$_staging/etc/"
+cp /etc/shells "$_staging/etc/"
 
 echo "apkovl: assemble"
 cd "$_staging"

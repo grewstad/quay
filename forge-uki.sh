@@ -83,7 +83,7 @@ echo "stub: $STUB"
 
 # ── cmdline ───────────────────────────────────────────────────────────────────
 
-CMDLINE="modules=loop,squashfs,sd-mod,usb-storage,xfs,ext4,overlay"
+CMDLINE="modules=loop,squashfs,sd-mod,usb-storage,xfs,ext4,overlay,xhci-hcd,usbhid,hid-generic"
 CMDLINE="$CMDLINE modloop=LABEL=QUAY_STORAGE:boot/modloop-lts"
 CMDLINE="$CMDLINE alpine_dev=LABEL=QUAY_STORAGE"
 CMDLINE="$CMDLINE copytoram=yes quiet console=tty0 console=ttyS0,115200"
@@ -110,7 +110,7 @@ echo "cmdline: $CMDLINE"
 printf '%s' "$CMDLINE" > /tmp/quay-cmdline
 
 MKINITFS_CONF="/tmp/mkinitfs.quay.conf"
-FEATURES="virtio network storage base squashfs scsi ahci nvme usb-storage xfs bridge"
+FEATURES="virtio network storage base squashfs scsi ahci nvme usb-storage xfs bridge usb hid graphics audio"
 COMPRESSION="zstd"
 
 # Ensure features.d exists and has basic definitions if missing (standard for Alpine live ISOs)
