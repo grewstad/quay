@@ -253,12 +253,14 @@ sh "$QUAY_DIR/forge-uki.sh" "$STORAGE_UUID" "$VFIO_IDS" "$ISO_CORES" "$HUGEPAGE_
 mkdir -p /mnt/target_boot/EFI/Linux
 cp /tmp/quay.efi /mnt/target_boot/EFI/Linux/quay.efi
 
-# The UKI is now inclusive of modloop; no need to copy to storage.
-
-# Copy apks directory to storage (standard Alpine location)
-if [ -d "/media/cdrom/apks" ]; then
+# Copy modloop and apks to storage for RAM-resident persistence
+if [ -d "/media/cdrom" ]; then
+    echo "pkg: modloop"
+    mkdir -p /mnt/storage/boot
+    cp /media/cdrom/boot/modloop-lts /mnt/storage/boot/modloop-lts
+    
     mkdir -p /mnt/storage/apks
-    cp -a /media/cdrom/apks/* /mnt/storage/apks/
+    cp -a /media/cdrom/apks/x86_64 /mnt/storage/apks/
     touch /mnt/storage/apks/.boot_repository
 fi
 
