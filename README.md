@@ -42,7 +42,7 @@ sh install.sh
 
 The installer asks for your partitions, bridge name, cores to isolate, hugepage count, VFIO device IDs, hostname, root password, and an SSH public key. It formats the storage partition as XFS if it isn't already, builds the UKI, and registers it with the firmware.
 
-See [install.md](install.md) for what each prompt does and how to rebuild the UKI after changes.
+See [install.md](documentation/install.md) for what each prompt does and how to rebuild the UKI after changes.
 
 ---
 
@@ -56,18 +56,18 @@ Any changes you make to the running host need to be committed to survive a reboo
 lbu commit
 ```
 
-See [persistence.md](persistence.md) for how lbu works and what it tracks.
+See [persistence.md](documentation/persistence.md) for how lbu works and what it tracks.
 
 ---
 
 ## Documentation
 
-- [hardware.md](hardware.md) — firmware, IOMMU groups, CPU topology, partition prep
-- [install.md](install.md) — installer prompts, rebuilding the UKI
-- [network.md](network.md) — bridge setup, attaching guests
-- [passthrough.md](passthrough.md) — QEMU commands, CPU pinning, VFIO, hugepages
-- [persistence.md](persistence.md) — lbu, storage layout, what survives reboots
-- [security.md](security.md) — Secure Boot, SSH hardening, the firewall
+- [hardware.md](documentation/hardware.md) — firmware, IOMMU groups, CPU topology, partition prep
+- [install.md](documentation/install.md) — installer prompts, rebuilding the UKI
+- [network.md](documentation/network.md) — bridge setup, attaching guests
+- [passthrough.md](documentation/passthrough.md) — QEMU commands, CPU pinning, VFIO, hugepages
+- [persistence.md](documentation/persistence.md) — lbu, storage layout, what survives reboots
+- [security.md](documentation/security.md) — Secure Boot, SSH hardening, the firewall
 
 ---
 
