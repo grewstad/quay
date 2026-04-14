@@ -285,50 +285,67 @@ efibootmgr -L "Quay" -d "$_disk" -p "$_partnum" -l "\\EFI\\Linux\\quay.efi" -c >
 
 # ── final configuration ───────────────────────────────────────────────────────
 
-# Configure Bridge networking for the hypervisor
-# Dynamically detect the first physical interface for the bridge
-_iface=$(ip -o link show | awk -F': ' '$3 !~ /lo|br0/ {print $2; exit}')
-echo "net: br0 ($_iface)"
+# Configure Resilient Networking (Multi-Interface)
+# Host: DHCP for all Physical and Wireless interfaces
+# VMs: Isolated Bridge (br0) with NAT
+_interfaces=$(ip -o link show | awk -F': ' '$3 !~ /lo|br0/ {print $2}')
+echo "net: host=$_interfaces guest=br0"
 cat > /etc/network/interfaces << EOF
 auto lo
 iface lo inet loopback
+EOF
+
+for iface in $_interfaces; do
+    cat >> /etc/network/interfaces << EOF
+
+auto $iface
+iface $iface inet dhcp
+EOF
+done
+
+cat >> /etc/network/interfaces << EOF
 
 auto br0
-iface br0 inet dhcp
-    bridge-ports $_iface
+iface br0 inet static
+    address 10.0.42.1
+    netmask 255.255.255.0
+    bridge-ports none
     bridge-stp 0
     bridge-fd 0
 EOF
 
 # Hypervisor performance hardening via sysctl
-echo "sysctl: kvm"
+echo "sysctl: quay"
 mkdir -p /etc/sysctl.d
 cat > /etc/sysctl.d/quay.conf << EOF
+# Enable IP forwarding for VM NAT
+net.ipv4.ip_forward = 1
 # Reduce swapping for VM performance
 vm.swappiness = 10
 # Smoother I/O for large VM disk images
 vm.dirty_ratio = 20
 vm.dirty_background_ratio = 10
-# Bridge netfilter pass-through
-net.bridge.bridge-nf-call-iptables = 0
-net.bridge.bridge-nf-call-ip6tables = 0
 EOF
+
+# Configure NAT Masquerade for VMs
+# We use the first detected interface for outbound NAT
+_wan=$(echo $_interfaces | awk '{print $1}')
+mkdir -p /etc/local.d
+cat > /etc/local.d/quay-nat.start << EOF
+#!/bin/sh
+iptables -t nat -A POSTROUTING -s 10.0.42.0/24 -o $_wan -j MASQUERADE
+EOF
+chmod +x /etc/local.d/quay-nat.start
+rc-update add local default 2>/dev/null || true
 
 # Seed the world file with hypervisor dependencies
 echo "pkg: seed"
-_pkgs="qemu-system-x86_64 qemu-img xfsprogs bridge-utils bash zsh git curl wget rsync vim less pciutils usbutils"
+_pkgs="qemu-system-x86_64 qemu-img xfsprogs bridge-utils bash zsh git curl wget rsync vim less pciutils usbutils wpa_supplicant"
 for pkg in $_pkgs; do
     if ! grep -q "^$pkg$" /etc/apk/world; then
         echo "$pkg" >> /etc/apk/world
     fi
 done
-
-# Provision offline APK cache on storage for stateless graduation
-echo "pkg: cache"
-mkdir -p /mnt/storage/cache
-apk fetch --quiet --recursive --output /mnt/storage/cache $_pkgs 2>/dev/null || true
-# Pre-initialize index for the local repository
-apk index -o /mnt/storage/cache/APKINDEX.tar.gz /mnt/storage/cache/*.apk 2>/dev/null || true
 
 # Set Zsh as default shell for root
 if [ -f /bin/zsh ]; then
@@ -364,9 +381,8 @@ cp /etc/passwd "$_staging/etc/"
 cp /etc/hostname "$_staging/etc/"
 mkdir -p "$_staging/etc/apk"
 cp /etc/apk/world "$_staging/etc/apk/"
-# Configure local storage as a priority repository for offline boot
-echo "/mnt/storage/cache" > "$_staging/etc/apk/repositories"
-cat /etc/apk/repositories >> "$_staging/etc/apk/repositories"
+# Use official mirrors for online graduation
+cat /etc/apk/repositories > "$_staging/etc/apk/repositories"
 
 cp /etc/network/interfaces "$_staging/etc/"
 mkdir -p "$_staging/etc/sysctl.d"
