@@ -165,7 +165,7 @@ STORAGE_FSTYPE=$(blkid -s TYPE -o value "$STORAGE_PART" 2>/dev/null || true)
 if [ "$STORAGE_FSTYPE" != "xfs" ]; then
     if ask_yn "quay: storage: $STORAGE_PART not formatted as XFS. format now?"; then
         echo "quay: storage: formatting $STORAGE_PART as XFS..."
-        mkfs.xfs -f -m reflink=1 "$STORAGE_PART" || die "failed to format XFS"
+        mkfs.xfs -f -L QUAY_STORAGE -m reflink=1 "$STORAGE_PART" || die "failed to format XFS"
         STORAGE_FSTYPE="xfs"
     fi
 fi
