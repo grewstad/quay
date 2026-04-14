@@ -4,7 +4,13 @@
 
 MEM="${MEM:-1G}"
 CPUS="${CPUS:-1}"
-ISO="${ISO:-void-live-x86_64-20250202-base.iso}"
+ISO="${ISO:-void-live-x86_64-20240314-base.iso}"
+ISO_URL="https://repo-default.voidlinux.org/live/current/$ISO"
+
+if [ ! -f "$ISO" ]; then
+    echo "quay: downloading $ISO"
+    wget -c "$ISO_URL" -O "$ISO" || die "failed to download $ISO"
+fi
 DISK="${DISK:-/mnt/storage/vms/void.qcow2}"
 
 if [ ! -f "$DISK" ]; then
