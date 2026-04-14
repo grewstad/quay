@@ -334,7 +334,7 @@ lbu include /etc/apk/world
 lbu include /etc/sysctl.d/quay.conf
 
 echo "lbu: commit"
-lbu package -v /mnt/storage/quay.apkovl.tar.gz
+lbu package -v /mnt/storage/alpine.apkovl.tar.gz
 
 echo "done"
 

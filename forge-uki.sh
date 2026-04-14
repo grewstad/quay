@@ -85,7 +85,7 @@ echo "stub: $STUB"
 
 CMDLINE="modules=loop,squashfs,sd-mod,usb-storage,xfs,ext4,overlay"
 CMDLINE="$CMDLINE modloop=LABEL=QUAY_STORAGE:boot/modloop-lts"
-CMDLINE="$CMDLINE alpine_dev=LABEL=QUAY_STORAGE apkovl=quay.apkovl.tar.gz"
+CMDLINE="$CMDLINE alpine_dev=LABEL=QUAY_STORAGE"
 CMDLINE="$CMDLINE copytoram=yes quiet console=tty0 console=ttyS0,115200"
 
 if grep -qi "AuthenticAMD" /proc/cpuinfo; then
