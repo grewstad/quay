@@ -1,25 +1,19 @@
 # getting started
 
-Quay is a RAM-resident hypervisor. Host state is managed via the storage partition (XFS) and the Alpine Backup Utility (LBU).
+Quay is a RAM-resident hypervisor. Host state and guest data are managed via the persistent storage partition (XFS) and the Alpine Backup Utility (LBU).
 
 ---
 
 ## Host environment
 
-### Partitions
-
-Manual partitioning is recommended for complex setups. See [install.md](install.md) for the automated 1-pass deployment vs manual preparation.
-
+### Storage
+The storage partition must be mounted to access templates and preserve state:
 ```sh
-# Example GPT layout
-parted /dev/sda mklabel gpt
-parted /dev/sda mkpart ESP fat32 1MiB 513MiB
-parted /dev/sda set 1 esp on
-parted /dev/sda mkpart storage xfs 513MiB 100%
+mount /dev/nvme0n1p2 /mnt/storage
 ```
 
 ### Networking
-Setup the bridge if you didn't configure it during installation:
+Quay provides a `br0` bridge for guest connectivity. If you need to manually configure the bridge interface:
 ```sh
 ip link add br0 type bridge
 ip link set br0 up
@@ -37,7 +31,7 @@ wget -P /mnt/storage/iso http://repo-default.voidlinux.org/live/current/void-liv
 ```
 
 ### Launch guest
-Run the guest template with the ISO path:
+Run a guest template from the repository root:
 ```sh
 cd /tmp/quay/templates
 ISO=/mnt/storage/iso/void-live-x86_64-20250202-base.iso sh void.sh
@@ -58,3 +52,9 @@ To preserve host configuration changes across reboots:
    ```sh
    lbu commit -d /mnt/storage
    ```
+
+---
+
+## See Also
+- [install.md](install.md) for initial substrate deployment and UKI building.
+- [hardware.md](hardware.md) for IOMMU and CPU isolation verification.
