@@ -246,6 +246,12 @@ elif [ -f "/modloop-lts" ]; then
     cp /modloop-lts /mnt/storage/modloop-lts
 fi
 
+# Copy apks directory to storage to allow initramfs to bootstrap the rootfs
+if [ -d "/media/cdrom/apks" ]; then
+    mkdir -p /mnt/storage/apks
+    cp -a /media/cdrom/apks/* /mnt/storage/apks/
+fi
+
 # Removable path for universal boot compatibility
 mkdir -p /mnt/target_boot/EFI/BOOT
 cp /tmp/quay.efi /mnt/target_boot/EFI/BOOT/BOOTX64.EFI
