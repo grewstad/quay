@@ -330,7 +330,7 @@ hostname "$NEW_HOSTNAME"
 # Stage repository assets to /root
 echo "pkg: templates"
 cp -r "$QUAY_DIR/templates" /root/
-cp "$QUAY_DIR/void.sh" /root/void.sh
+cp "$QUAY_DIR/templates/void.sh" /root/void.sh
 chmod +x /root/void.sh
 
 # Assemble Persistence Payload (Clinical)
