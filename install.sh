@@ -285,34 +285,38 @@ efibootmgr -L "Quay" -d "$_disk" -p "$_partnum" -l "\\EFI\\Linux\\quay.efi" -c >
 
 # ── final configuration ───────────────────────────────────────────────────────
 
-# Configure Resilient Networking (Multi-Interface)
-# Host: DHCP for all Physical and Wireless interfaces
-# VMs: Isolated Bridge (br0) with NAT
-_interfaces=$(ip -o link show | awk -F': ' '$3 !~ /lo|br0/ {print $2}')
-echo "net: host=$_interfaces guest=br0"
-cat > /etc/network/interfaces << EOF
-auto lo
-iface lo inet loopback
+# Configure Resilient Networking (Absolute Perfection: Shell-Based)
+# Host & Guest Networking: Consolidated into boot script to bypass moody OpenRC networking
+echo "net: host=(local.d) guest=br0"
+
+# Wipe standard interfaces and surgically disable OpenRC networking to ensure tech-perfection
+echo "auto lo" > /etc/network/interfaces
+echo "iface lo inet loopback" >> /etc/network/interfaces
+[ -f /etc/init.d/networking ] && mv /etc/init.d/networking /etc/init.d/networking.disabled
+
+# Build the Definitive Boot Script
+cat > /etc/local.d/quay-bridge.start << EOF
+#!/bin/sh
+# Quay Workstation: Reliable Networking Initialization
+_iface=\$(ip link | awk -F: '\$0 !~ "lo|br0|link/" {print \$2; exit}' | tr -d ' ')
+echo "Graduating: \$_iface (DHCP)"
+udhcpc -i \$_iface -n -p /var/run/udhcpc.\$_iface.pid &
+
+# Guest NAT Bridge (br0)
+if ! ip link show br0 >/dev/null 2>&1; then
+    ip link add br0 type bridge
+    ip addr add 10.0.0.1/24 dev br0
+    ip link set br0 up
+fi
+iptables -t nat -A POSTROUTING -s 10.0.0.0/24 ! -d 10.0.0.0/24 -j MASQUERADE
 EOF
+chmod +x /etc/local.d/quay-bridge.start
 
-for iface in $_interfaces; do
-    cat >> /etc/network/interfaces << EOF
-
-auto $iface
-iface $iface inet dhcp
-EOF
-done
-
-cat >> /etc/network/interfaces << EOF
-
-auto br0
-iface br0 inet static
-    address 10.0.42.1
-    netmask 255.255.255.0
-    bridge-ports none
-    bridge-stp 0
-    bridge-fd 0
-EOF
+# QEMU Bridge Helper Configuration
+mkdir -p /etc/qemu
+echo "allow br0" > /etc/qemu/bridge.conf
+chmod 644 /etc/qemu/bridge.conf
+rc-update add local default
 
 # Hypervisor performance hardening via sysctl
 echo "sysctl: quay"
@@ -327,20 +331,11 @@ vm.dirty_ratio = 20
 vm.dirty_background_ratio = 10
 EOF
 
-# Configure NAT Masquerade for VMs
-# We use the first detected interface for outbound NAT
-_wan=$(echo $_interfaces | awk '{print $1}')
-mkdir -p /etc/local.d
-cat > /etc/local.d/quay-nat.start << EOF
-#!/bin/sh
-iptables -t nat -A POSTROUTING -s 10.0.42.0/24 -o $_wan -j MASQUERADE
-EOF
-chmod +x /etc/local.d/quay-nat.start
-rc-update add local default 2>/dev/null || true
+rc-update add local default
 
 # Seed the world file with hypervisor dependencies
 echo "pkg: seed"
-_pkgs="qemu-system-x86_64 qemu-img xfsprogs bridge-utils bash zsh git curl wget rsync vim less pciutils usbutils wpa_supplicant"
+_pkgs="qemu-system-x86_64 qemu-img xfsprogs bridge-utils bash zsh git curl wget rsync vim less pciutils usbutils wpa_supplicant iptables iproute2"
 for pkg in $_pkgs; do
     if ! grep -q "^$pkg$" /etc/apk/world; then
         echo "$pkg" >> /etc/apk/world
