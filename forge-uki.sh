@@ -89,7 +89,7 @@ echo "quay: uki: stub: $STUB"
 # ── cmdline ───────────────────────────────────────────────────────────────────
 
 CMDLINE="modules=loop,squashfs,sd-mod,usb-storage,xfs,overlay"
-CMDLINE="$CMDLINE alpine_dev=LABEL=QUAY_STORAGE alpine_repo=/media/QUAY_STORAGE/apks"
+CMDLINE="$CMDLINE alpine_dev=LABEL=QUAY_STORAGE"
 CMDLINE="$CMDLINE copytoram=yes quiet console=tty0 console=ttyS0,115200"
 
 # 2MB hugepages are universally supported.
@@ -129,7 +129,7 @@ fi
 
 # modloop is copied to storage root by install.sh; initramfs mounts
 # alpine_dev then finds it there at boot.
-CMDLINE="$CMDLINE modloop=/media/QUAY_STORAGE/modloop-lts modloop_verify=no"
+CMDLINE="$CMDLINE modloop_verify=no"
 
 echo "quay: uki: cmdline: $CMDLINE"
 printf '%s' "$CMDLINE" > /tmp/quay-cmdline
