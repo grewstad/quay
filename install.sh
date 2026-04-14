@@ -122,7 +122,7 @@ apk add --quiet \
     xfsprogs dosfstools \
     util-linux parted \
     shadow uuidgen \
-    binutils efitools mkinitfs
+    binutils efitools mkinitfs sbsigntool
 # EFI stub package name differs between Alpine versions
 apk add --no-cache gummiboot-efistub || apk add --no-cache gummiboot || apk add --no-cache systemd-boot-efi || apk add --no-cache efi-stub || die "cannot install EFI stub package"
 

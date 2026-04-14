@@ -68,8 +68,7 @@ qemu-img create -f qcow2 "$DISK_PATH" "$DISK_SIZE" || die "qemu-img create faile
 
 # build QEMU display/GPU arguments
 if [ "$USE_GPU" = "1" ]; then
-    [ -n "$GPU_ID" ] || [ -f /tmp/quay_install.state ] && . /tmp/quay_install.state
-    # If not in env or state, try to detect from VFIO_IDS
+    # Use environment variables if provided
     GPU_ID="${GPU_ID:-${VFIO_IDS%%,*}}" 
     # Grab the second ID in the list for audio if it exists
     GPU_AUDIO_ID="${GPU_AUDIO_ID:-${VFIO_IDS#*,}}"
