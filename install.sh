@@ -271,9 +271,18 @@ if ! grep -q "$STORAGE_UUID" /etc/fstab 2>/dev/null; then
     echo "UUID=$STORAGE_UUID  /mnt/storage  $STORAGE_FSTYPE  defaults,noatime  0  2" >> /etc/fstab
 fi
 
-mkdir -p /etc/lbu
-echo "LBU_BACKUPDIR=/mnt/storage" > /etc/lbu/lbu.conf
-lbu include /etc/shadow /etc/passwd /etc/hostname /root/.ssh/authorized_keys
-lbu commit -d /mnt/storage >/dev/null 2>&1 || true
+    if [ "$QUAY_AUTO" = "1" ]; then
+        echo "root:root" | chpasswd
+        echo "quay: root password set to 'root'"
+    fi
+
+    mkdir -p /etc/lbu
+    echo "LBU_BACKUPDIR=/mnt/storage" > /etc/lbu/lbu.conf
+    lbu include /etc/shadow /etc/passwd /etc/hostname /root/.ssh/authorized_keys
+    lbu commit -d /mnt/storage >/dev/null 2>&1 || true
+    
+    echo "quay: verifying apkovl..."
+    tar -tf /mnt/storage/quay.apkovl.tar.gz | grep etc/shadow
+
 
 echo "quay: done: installed successfully"
