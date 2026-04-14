@@ -266,10 +266,10 @@ efibootmgr -L "Quay" -d "$_disk" -p "$_partnum" -l "\\EFI\\Linux\\quay.efi" -c >
 
 # ── final configuration ───────────────────────────────────────────────────────
 
-echo "quay: finalizing"
-if ! grep -q "$STORAGE_UUID" /etc/fstab 2>/dev/null; then
-    echo "UUID=$STORAGE_UUID  /mnt/storage  $STORAGE_FSTYPE  defaults,noatime  0  2" >> /etc/fstab
-fi
+# Note: We do NOT add the storage partition to /etc/fstab here.
+# Alpine's init script will keep it mounted at /media/QUAY_STORAGE
+# because of the alpine_dev=LABEL=QUAY_STORAGE boot parameter.
+
 
     if [ "$QUAY_AUTO" = "1" ]; then
         echo "root:root" | chpasswd
