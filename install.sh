@@ -325,16 +325,41 @@ done
 echo "$NEW_HOSTNAME" > /etc/hostname
 hostname "$NEW_HOSTNAME"
 
-# Persist critical files and the validation template
-lbu include /etc/shadow /etc/passwd /etc/hostname /root/.ssh/authorized_keys
-lbu include /etc/network/interfaces
-lbu include /root/void.sh
-lbu include /root/templates
-lbu include /etc/apk/world
-lbu include /etc/sysctl.d/quay.conf
+# ── persist configuration ───────────────────────────────────────────────────
 
-echo "lbu: commit"
-lbu package -v /mnt/storage/alpine.apkovl.tar.gz
+# Stage repository assets to /root
+echo "pkg: templates"
+cp -r "$QUAY_DIR/templates" /root/
+cp "$QUAY_DIR/void.sh" /root/void.sh
+chmod +x /root/void.sh
+
+# Assemble Persistence Payload (Clinical)
+_staging=/tmp/quay_staging
+rm -rf "$_staging"
+mkdir -p "$_staging/etc" "$_staging/root"
+
+cp /etc/shadow "$_staging/etc/"
+cp /etc/passwd "$_staging/etc/"
+cp /etc/hostname "$_staging/etc/"
+mkdir -p "$_staging/etc/apk"
+cp /etc/apk/world "$_staging/etc/apk/"
+cp /etc/network/interfaces "$_staging/etc/"
+mkdir -p "$_staging/etc/sysctl.d"
+cp /etc/sysctl.d/quay.conf "$_staging/etc/sysctl.d/"
+mkdir -p "$_staging/root/.ssh"
+cp /root/.ssh/authorized_keys "$_staging/root/.ssh/"
+cp /root/void.sh "$_staging/root/"
+cp -r /root/templates "$_staging/root/"
+
+# Ensure KVM modules load at boot
+echo "kvm" >> "$_staging/etc/modules"
+grep -qi "AuthenticAMD" /proc/cpuinfo && echo "kvm_amd" >> "$_staging/etc/modules"
+grep -qi "GenuineIntel" /proc/cpuinfo && echo "kvm_intel" >> "$_staging/etc/modules"
+
+echo "apkovl: assemble"
+cd "$_staging"
+tar -czf /mnt/storage/alpine.apkovl.tar.gz .
+cd - > /dev/null
 
 echo "done"
 
