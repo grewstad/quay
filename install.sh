@@ -316,6 +316,15 @@ chmod +x /etc/local.d/quay-bridge.start
 mkdir -p /etc/qemu
 echo "allow br0" > /etc/qemu/bridge.conf
 chmod 644 /etc/qemu/bridge.conf
+
+# Resilient Shell Substrate (Fail-safe Zsh)
+echo "pkg: shell-upgrade"
+cat > /root/.profile << EOF
+if [ -f /bin/zsh ]; then
+    export SHELL=/bin/zsh
+    exec /bin/zsh -l
+fi
+EOF
 rc-update add local default
 
 # Hypervisor performance hardening via sysctl
@@ -342,10 +351,11 @@ for pkg in $_pkgs; do
     fi
 done
 
-# Set Zsh as default shell for root
-if [ -f /bin/zsh ]; then
-    chsh -s /bin/zsh root
-fi
+# Clinical Shell Stabilization: Force /bin/sh for boot stability
+# This absolutely overrides any previous shell assignments
+echo "sys: shell (sh)"
+sed -i 's|^root:.*$|root:x:0:0:root:/root:/bin/sh|' /etc/passwd
+grep "^root:" /etc/passwd
 
 # Final identity check
 echo "$NEW_HOSTNAME" > /etc/hostname
@@ -354,11 +364,8 @@ hostname "$NEW_HOSTNAME"
 # ── persist configuration ───────────────────────────────────────────────────
 
 # Stage repository assets to /root
-echo "pkg: templates"
-cp -r "$QUAY_DIR/templates" /root/
-cp "$QUAY_DIR/templates/void.sh" /root/void.sh
+# Stage repository assets to /root (Minimalist Only)
 cp "$QUAY_DIR/documentation/getting-started.md" /root/getting-started.md
-chmod +x /root/void.sh
 
 # Configure persistent services
 echo "sys: services"
@@ -384,9 +391,8 @@ mkdir -p "$_staging/etc/sysctl.d"
 cp /etc/sysctl.d/quay.conf "$_staging/etc/sysctl.d/"
 mkdir -p "$_staging/root/.ssh"
 cp /root/.ssh/authorized_keys "$_staging/root/.ssh/"
-cp /root/void.sh "$_staging/root/"
 cp /root/getting-started.md "$_staging/root/"
-cp -r /root/templates "$_staging/root/"
+cp /root/.profile "$_staging/root/"
 
 # Ensure KVM modules load at boot
 echo "kvm" >> "$_staging/etc/modules"
