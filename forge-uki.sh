@@ -1,10 +1,5 @@
-#!/bin/sh
 # forge-uki.sh — quay UKI builder
-# fuses vmlinuz + initramfs + cmdline into a signed or unsigned quay.efi
-#
-# usage: forge-uki.sh <storage_uuid> [vfio_ids] [iso_cores] [hugepage_count] [--sign]
-#
-# https://github.com/grewstad/quay
+# usage: bridge_uuid [vfio_ids] [iso_cores] [hp_count] [--sign]
 set -e
 
 [ $# -ge 1 ] || {
@@ -48,7 +43,7 @@ STUB=$(find /usr/lib/systemd/boot/efi -name "linuxx64.efi.stub" 2>/dev/null | he
 [ -z "$STUB" ] && STUB=$(find /usr/lib -name "linuxx64.efi.stub" 2>/dev/null | head -1)
 
 if [ -z "$STUB" ]; then
-    echo "quay: uki: pkg: installing efi stub"
+    echo "pkg: systemd-efistub"
     apk add --quiet systemd-efistub 2>/dev/null \
         || apk add --quiet systemd-boot 2>/dev/null \
         || die "cannot install efi stub package"
@@ -82,35 +77,15 @@ done
 [ -n "$KERNEL" ] || die "no vmlinuz found (searched /boot, /media/*/boot)"
 [ -n "$INITRD" ] || die "no initramfs found (searched /boot, /media/*/boot)"
 
-echo "quay: uki: kern: $KERNEL"
-echo "quay: uki: initrd: $INITRD"
-echo "quay: uki: stub: $STUB"
+echo "kern: $KERNEL"
+echo "initrd: $INITRD"
+echo "stub: $STUB"
 
 # ── cmdline ───────────────────────────────────────────────────────────────────
 
-CMDLINE="modules=loop,squashfs,sd-mod,usb-storage,xfs,overlay"
-CMDLINE="$CMDLINE alpine_dev=LABEL=QUAY_STORAGE"
+CMDLINE="modules=loop,squashfs,sd-mod,usb-storage,xfs,ext4,overlay"
+CMDLINE="$CMDLINE alpine_dev=LABEL=QUAY_STORAGE apkovl=LABEL=QUAY_STORAGE:quay.apkovl.tar.gz"
 CMDLINE="$CMDLINE copytoram=yes quiet console=tty0 console=ttyS0,115200"
-
-# 2MB hugepages are universally supported.
-# 1GB pages (hugepagesz=1G) require the pdpe1gb CPU flag and silently do
-# nothing without it, producing confusing QEMU mmap errors at runtime.
-CMDLINE="$CMDLINE hugepagesz=2M default_hugepagesz=2M"
-[ -n "$HUGEPAGE_COUNT" ] && CMDLINE="$CMDLINE hugepages=$HUGEPAGE_COUNT"
-
-# mitigations=auto without nosmt.
-# nosmt disables hyperthreading system-wide, halving usable thread count
-# and directly contradicting the isolcpus/VM-cores design.
-CMDLINE="$CMDLINE mitigations=auto"
-
-# kernel hardening parameters.
-# lockdown=confidentiality is intentionally excluded: it blocks VFIO,
-# unsigned module loading, perf, eBPF, and MSR access — all legitimate
-# hypervisor host requirements. add it to your own cmdline if your use
-# case permits it.
-CMDLINE="$CMDLINE slab_nomerge init_on_alloc=1 init_on_free=1"
-CMDLINE="$CMDLINE page_alloc.shuffle=1 randomize_kstack_offset=on"
-CMDLINE="$CMDLINE vsyscall=none debugfs=off"
 
 if grep -qi "AuthenticAMD" /proc/cpuinfo; then
     CMDLINE="$CMDLINE amd_iommu=on iommu=pt kvm_amd.nested=1"
@@ -127,16 +102,25 @@ if [ -n "$VFIO_IDS" ]; then
     CMDLINE="$CMDLINE rd.driver.pre=vfio_pci"
 fi
 
-# modloop is copied to storage root by install.sh; initramfs mounts
-# alpine_dev then finds it there at boot.
+# inclusive uki; no modloop
 CMDLINE="$CMDLINE modloop_verify=no"
 
-echo "quay: uki: cmdline: $CMDLINE"
+echo "cmdline: $CMDLINE"
 printf '%s' "$CMDLINE" > /tmp/quay-cmdline
 
 MKINITFS_CONF="/tmp/mkinitfs.quay.conf"
-FEATURES="vfio kvm base squashfs scsi ahci nvme usb-storage xfs"
+FEATURES="virtio network storage base squashfs scsi ahci nvme usb-storage xfs bridge"
 COMPRESSION="zstd"
+
+# Ensure features.d exists and has basic definitions if missing (standard for Alpine live ISOs)
+if [ ! -d /etc/mkinitfs/features.d ]; then
+    mkdir -p /etc/mkinitfs/features.d
+    echo "kernel/fs/xfs/xfs.ko" > /etc/mkinitfs/features.d/xfs
+    echo "kernel/fs/ext4/ext4.ko" > /etc/mkinitfs/features.d/ext4
+    echo "kernel/fs/fat/vfat.ko kernel/fs/fat/fat.ko" > /etc/mkinitfs/features.d/vfat
+    echo "kernel/drivers/block/loop.ko kernel/fs/squashfs/squashfs.ko" > /etc/mkinitfs/features.d/squashfs
+    echo "kernel/drivers/nvme/host/nvme.ko kernel/drivers/nvme/host/nvme-core.ko" > /etc/mkinitfs/features.d/nvme
+fi
 
 cat > "$MKINITFS_CONF" << EOF
 features="$FEATURES"
@@ -144,7 +128,7 @@ compression="$COMPRESSION"
 EOF
 
 NEW_INITRD="/tmp/initramfs.quay"
-echo "quay: uki: initrd: building (compression=$COMPRESSION)..."
+echo "initrd: mkinitfs (zstd)"
 mkinitfs -c "$MKINITFS_CONF" -o "$NEW_INITRD" || die "mkinitfs failed"
 INITRD="$NEW_INITRD"
 
@@ -165,7 +149,7 @@ VMA_CMDLINE=$(( VMA_OSREL  + $(align_4k "$OSREL_SIZE") ))
 VMA_LINUX=$(( VMA_CMDLINE  + $(align_4k "$CMDL_SIZE")  + 1048576 ))
 VMA_INITRD=$(( VMA_LINUX   + $(align_4k "$KERN_SIZE")  + 1048576 ))
 
-printf "quay: uki: layout: .osrel=0x%x .cmdline=0x%x .linux=0x%x .initrd=0x%x\n" \
+printf "layout: .osrel=0x%x .cmdline=0x%x .linux=0x%x .initrd=0x%x\n" \
     $VMA_OSREL $VMA_CMDLINE $VMA_LINUX $VMA_INITRD
 
 # ── fuse ─────────────────────────────────────────────────────────────────────
@@ -174,7 +158,7 @@ UNSIGNED_OUT="/tmp/quay.efi.unsigned"
 FINAL_OUT="/tmp/quay.efi"
 rm -f "$UNSIGNED_OUT" "$FINAL_OUT"
 
-echo "quay: uki: fusing image"
+echo "uki: fuse"
 objcopy \
     --add-section .osrel="/etc/os-release"     --change-section-vma ".osrel=$VMA_OSREL" \
     --add-section .cmdline="/tmp/quay-cmdline" --change-section-vma ".cmdline=$VMA_CMDLINE" \
@@ -193,8 +177,6 @@ if [ "$SIGN" = "true" ]; then
     # When called standalone without existing keys, generate a
     # standalone self-signed db cert and warn the user.
     if [ ! -f "$DB_KEY" ] || [ ! -f "$DB_CRT" ]; then
-        echo "quay: uki: warn: no db key found at $SB_DIR"
-        echo "quay: uki: cert: generating self-signed db cert"
         mkdir -p "$SB_DIR"
         chmod 700 "$SB_DIR"
         openssl req -newkey rsa:4096 -nodes -keyout "$DB_KEY" \
@@ -205,12 +187,12 @@ if [ "$SIGN" = "true" ]; then
         chmod 600 "$DB_KEY"
     fi
 
-    echo "quay: uki: cert: signing with $DB_CRT"
+    echo "cert: sign ($DB_CRT)"
     sbsign --key "$DB_KEY" --cert "$DB_CRT" --output "$FINAL_OUT" "$UNSIGNED_OUT" \
         || die "sbsign failed"
 
     if sbverify --cert "$DB_CRT" "$FINAL_OUT" >/dev/null 2>&1; then
-        echo "quay: uki: cert: signature ok"
+        echo "cert: ok"
     else
         die "signature verification failed"
     fi
@@ -218,7 +200,7 @@ if [ "$SIGN" = "true" ]; then
     rm -f "$UNSIGNED_OUT"
 else
     mv "$UNSIGNED_OUT" "$FINAL_OUT"
-    echo "quay: uki: warn: unsigned — secure boot will reject this"
+    echo "warn: unsigned"
 fi
 
-printf "quay: uki: done: %s (%d bytes)\n" "$FINAL_OUT" "$(stat -c%s "$FINAL_OUT")"
+printf "done: %s (%d bytes)\n" "$FINAL_OUT" "$(stat -c%s "$FINAL_OUT")"

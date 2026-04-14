@@ -1,15 +1,6 @@
-#!/bin/sh
-# install.sh — quay installer
-#
 # pull and run from any alpine linux live environment:
-#   wget https://raw.githubusercontent.com/grewstad/quay/main/install.sh
-#   sh install.sh
-#
-# https://github.com/grewstad/quay
-#
-# Implementation Plan:
-# - Confirm the XFS-only formatting logic (already implemented) works correctly in a minimal Alpine environment.
-# - Bootloader Portability: Added gummiboot-efistub to the EFI stub search logic to ensure compatibility with Alpine 3.21+.
+#   apk add git && git clone https://github.com/grewstad/quay /tmp/quay
+#   cd /tmp/quay && sh install.sh
 
 set -e
 [ "$QUAY_AUTO" = "1" ] && set -x
@@ -54,15 +45,18 @@ ask_val() {
         fi
         
         # Try auto-mapping for critical partition fields
-        if [ "$1" = "EFI_PART" ] && [ -b /dev/vda1 ]; then
-            eval "$1=\"/dev/vda1\""
-            return
-        elif [ "$1" = "STORAGE_PART" ] && [ -b /dev/vda2 ]; then
-            eval "$1=\"/dev/vda2\""
-            return
-        elif [ "$1" = "BOOT_PART" ] && [ -b /dev/vda1 ]; then
-            eval "$1=\"/dev/vda1\""
-            return
+        if [ "$1" = "EFI_PART" ]; then
+            if [ -b /dev/vda1 ]; then eval "$1=\"/dev/vda1\""; return; fi
+            if [ -b /dev/nvme0n1p1 ]; then eval "$1=\"/dev/nvme0n1p1\""; return; fi
+            if [ -b /dev/nvme0n1 ]; then eval "$1=\"/dev/nvme0n1p1\""; return; fi
+        elif [ "$1" = "STORAGE_PART" ]; then
+            if [ -b /dev/vda2 ]; then eval "$1=\"/dev/vda2\""; return; fi
+            if [ -b /dev/nvme0n1p2 ]; then eval "$1=\"/dev/nvme0n1p2\""; return; fi
+            if [ -b /dev/nvme0n1 ]; then eval "$1=\"/dev/nvme0n1p2\""; return; fi
+        elif [ "$1" = "BOOT_PART" ]; then
+            if [ -b /dev/vda1 ]; then eval "$1=\"/dev/vda1\""; return; fi
+            if [ -b /dev/nvme0n1p1 ]; then eval "$1=\"/dev/nvme0n1p1\""; return; fi
+            if [ -b /dev/nvme0n1 ]; then eval "$1=\"/dev/nvme0n1p1\""; return; fi
         fi
 
         # Allow empty for non-critical hardware/identity fields
@@ -108,12 +102,12 @@ cat > /etc/apk/repositories << EOF
 ${REPO_BASE}/${REPO_BRANCH}/main
 ${REPO_BASE}/${REPO_BRANCH}/community
 EOF
-echo "quay: repo: set to ${REPO_BRANCH}/main + community"
+echo "repo: ${REPO_BRANCH}"
 apk update --quiet
 
 # ── dependencies ──────────────────────────────────────────────────────────────
 
-echo "quay: pkg: installing tools"
+echo "pkg: tools"
 apk add --quiet \
     openssh efibootmgr \
     qemu-system-x86_64 qemu-img bridge-utils \
@@ -131,7 +125,9 @@ apk add --no-cache gummiboot-efistub || apk add --no-cache gummiboot || apk add 
 mdev -s
 # Auto-mapping for critical partitions
 [ -z "$EFI_PART" ] && [ -b /dev/vda1 ] && EFI_PART="/dev/vda1"
+[ -z "$EFI_PART" ] && [ -b /dev/nvme0n1p1 ] && EFI_PART="/dev/nvme0n1p1"
 [ -z "$STORAGE_PART" ] && [ -b /dev/vda2 ] && STORAGE_PART="/dev/vda2"
+[ -z "$STORAGE_PART" ] && [ -b /dev/nvme0n1p2 ] && STORAGE_PART="/dev/nvme0n1p2"
 
 ask_val EFI_PART     "esp partition"     "$EFI_PART"
 [ -z "$BOOT_PART" ] && BOOT_PART="$EFI_PART"
@@ -139,12 +135,26 @@ ask_val BOOT_PART    "boot partition"    "$BOOT_PART"
 ask_val STORAGE_PART "storage partition" "$STORAGE_PART"
 ask_val BRIDGE_NAME  "bridge name"      "${BRIDGE_NAME:-br0}"
 
-[ -b "$EFI_PART" ]     || die "not a block device: $EFI_PART"
-[ -b "$STORAGE_PART" ] || die "not a block device: $STORAGE_PART"
+# If partition doesn't exist, check parent device and partition
+if [ ! -b "$EFI_PART" ]; then
+    PARENT_DISK=$(echo "$EFI_PART" | sed -E 's/p?[0-9]+$//')
+    [ -b "$PARENT_DISK" ] || die "not a block device: $EFI_PART (and no parent $PARENT_DISK found)"
+    echo "disk: partition"
+    parted -s "$PARENT_DISK" mklabel gpt 2>/dev/null || true
+    parted -s "$PARENT_DISK" mkpart ESP fat32 1MiB 513MiB
+    parted -s "$PARENT_DISK" set 1 esp on
+    parted -s "$PARENT_DISK" mkpart STORAGE xfs 513MiB 100%
+    mdev -s
+    sleep 2
+    echo "disk: format"
+    mkfs.fat -F32 "$EFI_PART"
+    mkfs.xfs -f -L QUAY_STORAGE -m reflink=1 "$STORAGE_PART"
+    sleep 1
+fi
 
 _check_part="${BOOT_PART:-$EFI_PART}"
 if [ -n "$_check_part" ] && ! check_part_space "$_check_part" 67108864; then
-    echo "quay: warn: boot partition has less than 64 mb free"
+    echo "warn: boot < 64mb"
 fi
 
 # ── format / verify filesystems ──────────────────────────────────────────────
@@ -163,8 +173,8 @@ fi
 STORAGE_FSTYPE=$(blkid -s TYPE -o value "$STORAGE_PART" 2>/dev/null || true)
 
 if [ "$STORAGE_FSTYPE" != "xfs" ]; then
-    if ask_yn "quay: storage: $STORAGE_PART not formatted as XFS. format now?"; then
-        echo "quay: storage: formatting $STORAGE_PART as XFS..."
+    if ask_yn "storage: $STORAGE_PART not formatted as XFS. format now?"; then
+        echo "storage: xfs $STORAGE_PART"
         mkfs.xfs -f -L QUAY_STORAGE -m reflink=1 "$STORAGE_PART" || die "failed to format XFS"
         STORAGE_FSTYPE="xfs"
     fi
@@ -184,7 +194,7 @@ guarded_mount "$STORAGE_PART" /mnt/storage
 # ── hardware settings ────────────────────────────────────────────────────────
 
 ISO_CORES="${ISO_CORES:-}"
-HUGEPAGE_COUNT="${HUGEPAGE_COUNT:-0}"
+HUGEPAGE_COUNT="${HUGEPAGE_COUNT:-512}"
 VFIO_IDS="${VFIO_IDS:-}"
 ask_val ISO_CORES      "cores to isolate" "$ISO_CORES"
 ask_val HUGEPAGE_COUNT "hugepages"        "$HUGEPAGE_COUNT"
@@ -211,7 +221,7 @@ ask_val VFIO_IDS       "vfio device IDs"  "$VFIO_IDS"
         rm -f /tmp/quay_bootstrap /tmp/quay_bootstrap.pub
     ssh-keygen -t ed25519 -f /tmp/quay_bootstrap -N "" -q
         cp /tmp/quay_bootstrap.pub /root/.ssh/authorized_keys
-        echo "quay: generated bootstrap key at /tmp/quay_bootstrap"
+        echo "ssh: bootstrap key /tmp/quay_bootstrap"
     else
         printf "paste ssh authorized_keys line (or enter to skip): "
         read -r _ans
@@ -225,7 +235,7 @@ ask_val VFIO_IDS       "vfio device IDs"  "$VFIO_IDS"
 
 # ── deploy UKI ────────────────────────────────────────────────────────────────
 
-echo "quay: deploying UKI"
+echo "uki: deploy"
 _target_part="${BOOT_PART:-$EFI_PART}"
 mkdir -p /mnt/target_boot
 guarded_mount "$_target_part" /mnt/target_boot
@@ -233,19 +243,13 @@ guarded_mount "$_target_part" /mnt/target_boot
 if [ ! -f "$QUAY_DIR/forge-uki.sh" ]; then
     die "uki: missing forge-uki.sh; ensure repository is complete"
 fi
-echo "quay: uki: forging image"
+echo "uki: forge"
 sh "$QUAY_DIR/forge-uki.sh" "$STORAGE_UUID" "$VFIO_IDS" "$ISO_CORES" "$HUGEPAGE_COUNT"
 
 mkdir -p /mnt/target_boot/EFI/Linux
 cp /tmp/quay.efi /mnt/target_boot/EFI/Linux/quay.efi
 
-# Copy modloop to storage for boot use (standard Alpine location)
-mkdir -p /mnt/storage/boot
-if [ -f "/media/cdrom/boot/modloop-lts" ]; then
-    cp /media/cdrom/boot/modloop-lts /mnt/storage/boot/modloop-lts
-elif [ -f "/modloop-lts" ]; then
-    cp /modloop-lts /mnt/storage/boot/modloop-lts
-fi
+# The UKI is now inclusive of modloop; no need to copy to storage.
 
 # Copy apks directory to storage (standard Alpine location)
 if [ -d "/media/cdrom/apks" ]; then
@@ -268,23 +272,57 @@ efibootmgr -L "Quay" -d "$_disk" -p "$_partnum" -l "\\EFI\\Linux\\quay.efi" -c >
 
 # ── final configuration ───────────────────────────────────────────────────────
 
-# Note: We do NOT add the storage partition to /etc/fstab here.
-# Alpine's init script will keep it mounted at /media/QUAY_STORAGE
-# because of the alpine_dev=LABEL=QUAY_STORAGE boot parameter.
+# Configure Bridge networking for the hypervisor
+# This allows guest VMs to share the host's physical network seamlessly
+echo "net: br0 (eth0)"
+cat > /etc/network/interfaces << EOF
+auto lo
+iface lo inet loopback
 
+auto br0
+iface br0 inet dhcp
+    bridge-ports eth0
+    bridge-stp 0
+    bridge-fd 0
+EOF
 
-    if [ "$QUAY_AUTO" = "1" ]; then
-        echo "root:root" | chpasswd
-        echo "quay: root password set to 'root'"
+# Hypervisor performance hardening via sysctl
+echo "sysctl: kvm"
+mkdir -p /etc/sysctl.d
+cat > /etc/sysctl.d/quay.conf << EOF
+# Reduce swapping for VM performance
+vm.swappiness = 10
+# Smoother I/O for large VM disk images
+vm.dirty_ratio = 20
+vm.dirty_background_ratio = 10
+# Bridge netfilter pass-through
+net.bridge.bridge-nf-call-iptables = 0
+net.bridge.bridge-nf-call-ip6tables = 0
+EOF
+
+# Seed the world file with hypervisor dependencies
+echo "pkg: seed"
+for pkg in qemu-system-x86_64 qemu-img xfsprogs bridge-utils bash wget curl; do
+    if ! grep -q "^$pkg$" /etc/apk/world; then
+        echo "$pkg" >> /etc/apk/world
     fi
+done
 
-    mkdir -p /etc/lbu
-    echo "LBU_BACKUPDIR=/mnt/storage" > /etc/lbu/lbu.conf
-    lbu include /etc/shadow /etc/passwd /etc/hostname /root/.ssh/authorized_keys
-    lbu commit -d /mnt/storage >/dev/null 2>&1 || true
-    
-    echo "quay: verifying apkovl..."
-    tar -tf /mnt/storage/quay.apkovl.tar.gz | grep etc/shadow
+# Final identity check
+echo "$NEW_HOSTNAME" > /etc/hostname
+hostname "$NEW_HOSTNAME"
+
+# Persist critical files and the validation template
+lbu include /etc/shadow /etc/passwd /etc/hostname /root/.ssh/authorized_keys
+lbu include /etc/network/interfaces
+lbu include /root/void.sh
+lbu include /root/templates
+lbu include /etc/apk/world
+lbu include /etc/sysctl.d/quay.conf
+
+echo "lbu: commit"
+lbu package -v /mnt/storage/quay.apkovl.tar.gz
+
+echo "done"
 
 
-echo "quay: done: installed successfully"
