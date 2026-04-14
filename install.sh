@@ -239,6 +239,10 @@ sh "$QUAY_DIR/forge-uki.sh" "$STORAGE_UUID" "$VFIO_IDS" "$ISO_CORES" "$HUGEPAGE_
 mkdir -p /mnt/target_boot/EFI/Linux
 cp /tmp/quay.efi /mnt/target_boot/EFI/Linux/quay.efi
 
+# Removable path for universal boot compatibility
+mkdir -p /mnt/target_boot/EFI/BOOT
+cp /tmp/quay.efi /mnt/target_boot/EFI/BOOT/BOOTX64.EFI
+
 # Register UEFI entry
 _kname=$(basename "$(readlink -f "$_target_part")")
 _partnum=$(cat "/sys/class/block/$_kname/partition")
