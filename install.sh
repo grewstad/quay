@@ -250,6 +250,7 @@ fi
 if [ -d "/media/cdrom/apks" ]; then
     mkdir -p /mnt/storage/apks
     cp -a /media/cdrom/apks/* /mnt/storage/apks/
+    touch /mnt/storage/.boot_repository
 fi
 
 # Removable path for universal boot compatibility
