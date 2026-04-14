@@ -286,15 +286,16 @@ efibootmgr -L "Quay" -d "$_disk" -p "$_partnum" -l "\\EFI\\Linux\\quay.efi" -c >
 # ── final configuration ───────────────────────────────────────────────────────
 
 # Configure Bridge networking for the hypervisor
-# This allows guest VMs to share the host's physical network seamlessly
-echo "net: br0 (eth0)"
+# Dynamically detect the first physical interface for the bridge
+_iface=$(ip -o link show | awk -F': ' '$3 !~ /lo|br0/ {print $2; exit}')
+echo "net: br0 ($_iface)"
 cat > /etc/network/interfaces << EOF
 auto lo
 iface lo inet loopback
 
 auto br0
 iface br0 inet dhcp
-    bridge-ports eth0
+    bridge-ports $_iface
     bridge-stp 0
     bridge-fd 0
 EOF
@@ -315,14 +316,24 @@ EOF
 
 # Seed the world file with hypervisor dependencies
 echo "pkg: seed"
-for pkg in qemu-system-x86_64 qemu-img xfsprogs bridge-utils bash zsh git curl wget rsync vim less; do
+_pkgs="qemu-system-x86_64 qemu-img xfsprogs bridge-utils bash zsh git curl wget rsync vim less pciutils usbutils"
+for pkg in $_pkgs; do
     if ! grep -q "^$pkg$" /etc/apk/world; then
         echo "$pkg" >> /etc/apk/world
     fi
 done
 
+# Provision offline APK cache on storage for stateless graduation
+echo "pkg: cache"
+mkdir -p /mnt/storage/cache
+apk fetch --quiet --recursive --output /mnt/storage/cache $_pkgs 2>/dev/null || true
+# Pre-initialize index for the local repository
+apk index -o /mnt/storage/cache/APKINDEX.tar.gz /mnt/storage/cache/*.apk 2>/dev/null || true
+
 # Set Zsh as default shell for root
-chsh -s /bin/zsh root
+if [ -f /bin/zsh ]; then
+    chsh -s /bin/zsh root
+fi
 
 # Final identity check
 echo "$NEW_HOSTNAME" > /etc/hostname
@@ -339,20 +350,9 @@ chmod +x /root/void.sh
 
 # Configure persistent services
 echo "sys: services"
-rc-update add devfs sysinit
-rc-update add dmesg sysinit
-rc-update add mdev sysinit
-rc-update add hwdrivers sysinit
-rc-update add modloop sysinit
-rc-update add networking boot
-rc-update add sshd boot
-rc-update add hostname boot
-rc-update add sysctl boot
-rc-update add bootmisc boot
-rc-update add syslog boot
-rc-update add mount-ro shutdown
-rc-update add killprocs shutdown
-rc-update add savecache shutdown
+for svc in devfs dmesg mdev hwdrivers modloop; do rc-update add $svc sysinit 2>/dev/null || true; done
+for svc in networking sshd hostname sysctl bootmisc syslog; do rc-update add $svc boot 2>/dev/null || true; done
+for svc in mount-ro killprocs savecache; do rc-update add $svc shutdown 2>/dev/null || true; done
 
 # Assemble Persistence Payload (Clinical)
 _staging=/tmp/quay_staging
@@ -364,12 +364,17 @@ cp /etc/passwd "$_staging/etc/"
 cp /etc/hostname "$_staging/etc/"
 mkdir -p "$_staging/etc/apk"
 cp /etc/apk/world "$_staging/etc/apk/"
+# Configure local storage as a priority repository for offline boot
+echo "/mnt/storage/cache" > "$_staging/etc/apk/repositories"
+cat /etc/apk/repositories >> "$_staging/etc/apk/repositories"
+
 cp /etc/network/interfaces "$_staging/etc/"
 mkdir -p "$_staging/etc/sysctl.d"
 cp /etc/sysctl.d/quay.conf "$_staging/etc/sysctl.d/"
 mkdir -p "$_staging/root/.ssh"
 cp /root/.ssh/authorized_keys "$_staging/root/.ssh/"
 cp /root/void.sh "$_staging/root/"
+cp /root/getting-started.md "$_staging/root/"
 cp -r /root/templates "$_staging/root/"
 
 # Ensure KVM modules load at boot
