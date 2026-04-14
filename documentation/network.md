@@ -1,35 +1,73 @@
 # network
 
-## host bridge
+The installer creates a `vmrunner` user and sets a bridge name, but does not configure networking. Set it up on first boot.
 
-quay creates a standard linux bridge (`br0` by default) during install. host networking is bound to the bridge.
+---
 
-configuration lives in `/etc/network/interfaces`:
+## Bridge setup
+
+A Linux bridge lets guests share the physical NIC and appear as separate machines on your network. Edit `/etc/network/interfaces`:
 
 ```sh
 auto lo
 iface lo inet loopback
 
+auto eth0
+iface eth0 inet manual
+
 auto br0
 iface br0 inet dhcp
-    bridge_ports eth0
-    bridge_stp off
-    bridge_fd 0
+    bridge-ports eth0
+    bridge-stp off
+    bridge-fd 0
 ```
 
-## guest networking
+Replace `eth0` with your actual NIC name (`ip link` to check). Then:
 
-attach guests to the host bridge via `tap` interfaces:
+```sh
+rc-service networking restart
+lbu commit
+```
+
+For a static IP, replace `inet dhcp` with:
+
+```sh
+iface br0 inet static
+    address 192.168.1.10/24
+    gateway 192.168.1.1
+    bridge-ports eth0
+    bridge-stp off
+    bridge-fd 0
+```
+
+---
+
+## Attaching guests
 
 ```sh
 -netdev bridge,id=net0,br=br0 \
--device virtio-net-pci,netdev=net0,mac=<unique_mac>
+-device virtio-net-pci,netdev=net0
 ```
 
-## helper script (qemu-bridge-helper)
-
-`qemu-bridge-helper` is used to allow unprivileged users to attach tap devices to the bridge. it requires a configuration file at `/etc/qemu/bridge.conf`:
+The QEMU bridge helper reads `/etc/qemu/bridge.conf` to decide which bridges unprivileged processes can attach to. Create it if it doesn't exist:
 
 ```sh
-allow br0
+mkdir -p /etc/qemu
+echo "allow br0" > /etc/qemu/bridge.conf
+lbu commit
 ```
+
+---
+
+## SSH
+
+The installer stores your public key at `/root/.ssh/authorized_keys` but does not start or enable sshd. To do that:
+
+```sh
+apk add openssh
+rc-update add sshd default
+rc-service sshd start
+lbu commit
+```
+
+A hardened `sshd_config` template is at `templates/sshd_config.tpl` in the repo. Copy it to `/etc/ssh/sshd_config` if you want the restricted cipher/key settings, then `lbu commit`.

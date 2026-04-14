@@ -1,67 +1,67 @@
 # hardware
 
-## firmware
+Things to verify before running the installer.
 
-configure uefi setup:
+---
 
-- **uefi mode**: disable csm / legacy boot.
-- **virtualization**: enable vt-x (intel) or amd-v (amd).
-- **iommu**: enable vt-d (intel) or amd-vi/iommu (amd).
-- **primary gpu**: set to internal/igpu if using dgpu passthrough.
+## Firmware
 
-## host preparation
+- Disable CSM / Legacy Boot. Quay requires UEFI mode.
+- Enable virtualisation extensions — VT-x on Intel, AMD-V on AMD.
+- Enable IOMMU if you're passing through devices — VT-d on Intel, AMD-Vi on AMD.
+- If you have an iGPU and a discrete GPU and plan to pass the discrete one to a guest, set the primary display to the iGPU. This keeps the host console up while the VM owns the dGPU.
 
-boot alpine extended iso. configure networking and repositories:
+---
 
-```sh
-version=$(cat /etc/alpine-release | cut -d. -f1,2)
-printf "http://dl-cdn.alpinelinux.org/alpine/v$version/%s\n" main community > /etc/apk/repositories
-apk update
-apk add git dosfstools xfsprogs util-linux
-```
+## IOMMU groups
 
-## iommu verification
-
-verify iommu is active:
-
-```sh
-dmesg | grep -E "IOMMU|vt-d|AMD-Vi"
-```
-
-list iommu groups to identify isolation boundaries:
+Every device in an IOMMU group must be passed through together. Check your groups before assuming a device is passthrough-capable:
 
 ```sh
 for g in /sys/kernel/iommu_groups/*/; do
     echo "group ${g##*groups/}"
     for d in "$g"devices/*; do
-        echo "  $(lspci -nns \"$(basename \"$d\")\")"
+        echo "  $(lspci -nns "$(basename "$d")")"
     done
 done
 ```
 
-note the `vendor:device` ids (e.g. `10de:2684`) for passthrough.
+Note the `[vendor:device]` IDs at the end of each line for devices you want to pass through. The installer asks for these.
 
-## cpu topology
-
-view thread/core relationship:
+After enabling IOMMU in firmware, verify it's active:
 
 ```sh
-lscpu -e
+dmesg | grep -i iommu
 ```
 
-reserve at least one physical core (two threads) for the host. note the thread ranges for `isolcpus`.
+Empty output means it's not on despite being enabled in firmware — double-check the setting name (it varies by vendor: "AMD-Vi", "IOMMU", "VT-d").
 
-## storage
+---
 
-quay requires a gpt disk with two pre-formatted partitions:
+## CPU topology
 
-- **esp**: fat32 (~512mb). mounted at boot to `/boot`.
-- **storage**: xfs. mounted at boot to `/mnt/storage`. 
-
-example partitioning:
+The installer asks which CPU threads to isolate for guests. Isolated threads are hidden from the host scheduler — the host stays on its reserved cores, guests don't compete for time slices.
 
 ```sh
-fdisk /dev/vda # create gpt, 512m esp (type 1), remaining xfs (type 20)
-mkfs.fat -F32 /dev/vda1
-mkfs.xfs -f -m reflink=1 /dev/vda2
+lscpu -e=CPU,CORE,SOCKET
 ```
+
+Keep at least one full physical core (both threads if HT is enabled) for the host. The `CPU` column is what you pass as the isolation range — something like `2-7,10-15`.
+
+---
+
+## Partitions
+
+The installer does not partition for you. Create and format before running it.
+
+```sh
+parted /dev/sda mklabel gpt
+parted /dev/sda mkpart ESP fat32 1MiB 513MiB
+parted /dev/sda set 1 esp on
+parted /dev/sda mkpart storage xfs 513MiB 100%
+
+mkfs.fat -F32 /dev/sda1
+mkfs.xfs -f -m reflink=1 /dev/sda2
+```
+
+The ESP can be shared with another OS. Quay only writes to `/EFI/Linux/` and won't touch anything else on it. 64 MB free is enough for the UKI.

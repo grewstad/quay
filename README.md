@@ -1,42 +1,76 @@
 # quay
 
-minimalist alpine hypervisor primitive. host runs in ram, uki based efi stub boot.
+Quay is an installer that sets up Alpine Linux as a KVM hypervisor host. Alpine runs entirely from RAM. Your VMs and config live on a separate storage partition. There's no management layer — you launch guests with QEMU directly.
 
-## features
+The install script handles IOMMU, VFIO bindings, CPU isolation, and hugepages, then fuses everything into a single EFI binary (`quay.efi`) that the firmware loads directly. Networking, SSH, and anything else is up to you.
 
-- alpine linux diskless host
-- unified kernel image (uki) efi stub
-- xfs storage with reflink
-- passthrough (vfio), hugepages, cpu isolation
-- no management daemon; raw qemu
+---
 
-## setup
+## Before you start
 
-boot alpine extended iso (uefi). then:
+You need two pre-formatted partitions:
+
+- **ESP** — FAT32. 64 MB or more free. Can be shared with another OS.
+- **Storage** — XFS. Sized for your VM images.
 
 ```sh
-# configure repos and install tools
-version=$(cat /etc/alpine-release | cut -d. -f1,2)
-printf "http://dl-cdn.alpinelinux.org/alpine/v$version/%s\n" main community > /etc/apk/repositories
-apk update
-apk add git dosfstools xfsprogs util-linux
+mkfs.fat -F32 /dev/sda1
+mkfs.xfs -f -m reflink=1 /dev/sda2
+```
 
-# host install
-git clone https://github.com/grewstad/quay.git
-cd quay
-sh preinstall.sh
+In firmware, enable virtualisation extensions (VT-x / AMD-V) and IOMMU (VT-d / AMD-Vi) if you're doing passthrough. Disable CSM.
+
+See [hardware.md](hardware.md) for IOMMU group enumeration and CPU topology.
+
+---
+
+## Installing
+
+Boot the [Alpine Linux Extended ISO](https://alpinelinux.org/downloads/) in UEFI mode, then:
+
+```sh
+ip link set <nic> up && udhcpc -i <nic>
+
+VERSION=$(cat /etc/alpine-release | cut -d. -f1,2)
+printf "https://dl-cdn.alpinelinux.org/alpine/v$VERSION/%s\n" main community \
+    > /etc/apk/repositories
+apk update && apk add git
+
+git clone https://github.com/grewstad/quay.git && cd quay
 sh install.sh
 ```
 
-## documentation
+The installer asks for your partitions, bridge name, cores to isolate, hugepage count, VFIO device IDs, hostname, root password, and an SSH public key. It formats the storage partition as XFS if it isn't already, builds the UKI, and registers it with the firmware.
 
-- [hardware](documentation/hardware.md) - pcie, iommu, uefi setup
-- [install](documentation/install.md) - installation and repair
-- [network](documentation/network.md) - bridge and guest networking
-- [passthrough](documentation/passthrough.md) - device and gpu passthrough
-- [persistence](documentation/persistence.md) - disks and host state
-- [security](documentation/security.md) - uki signing and host hardening
+See [install.md](install.md) for what each prompt does and how to rebuild the UKI after changes.
 
-## license
+---
 
-mit
+## After install
+
+Reboot. The host comes up on the console. SSH is not configured by the installer — set it up yourself or connect physically. Your storage partition is mounted at `/mnt/storage`.
+
+Any changes you make to the running host need to be committed to survive a reboot:
+
+```sh
+lbu commit
+```
+
+See [persistence.md](persistence.md) for how lbu works and what it tracks.
+
+---
+
+## Documentation
+
+- [hardware.md](hardware.md) — firmware, IOMMU groups, CPU topology, partition prep
+- [install.md](install.md) — installer prompts, rebuilding the UKI
+- [network.md](network.md) — bridge setup, attaching guests
+- [passthrough.md](passthrough.md) — QEMU commands, CPU pinning, VFIO, hugepages
+- [persistence.md](persistence.md) — lbu, storage layout, what survives reboots
+- [security.md](security.md) — Secure Boot, SSH hardening, the firewall
+
+---
+
+## License
+
+MIT
