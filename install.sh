@@ -234,7 +234,7 @@ if [ ! -f "$QUAY_DIR/forge-uki.sh" ]; then
     die "uki: missing forge-uki.sh; ensure repository is complete"
 fi
 echo "quay: uki: forging image"
-sh "$QUAY_DIR/forge-uki.sh" "$STORAGE_UUID" "$ISO_CORES" "$VFIO_IDS" "$HUGEPAGE_COUNT"
+sh "$QUAY_DIR/forge-uki.sh" "$STORAGE_UUID" "$VFIO_IDS" "$ISO_CORES" "$HUGEPAGE_COUNT"
 
 mkdir -p /mnt/target_boot/EFI/Linux
 cp /tmp/quay.efi /mnt/target_boot/EFI/Linux/quay.efi
