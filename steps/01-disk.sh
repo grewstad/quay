@@ -13,7 +13,10 @@ device: $DISK
 2 : size=+,     type=ca7d7ccb-63ed-4c53-861c-1742536059cc, name="LUKS"
 EOF
 
-udevadm settle 2>/dev/null || sleep 2
+# trigger device node creation
+mdev -s 2>/dev/null || true
+udevadm settle 2>/dev/null || true
+sleep 2
 
 # discover partitions
 PART_ESP="${DISK}1"
