@@ -17,11 +17,6 @@ device: $DISK
 2 : size=+,     type=ca7d7ccb-63ed-4c53-861c-1742536059cc, name="LUKS"
 EOF
 
-# trigger device node creation
-mdev -s 2>/dev/null || true
-udevadm settle 2>/dev/null || true
-sleep 2
-
 # discover partitions
 PART_ESP="${DISK}1"
 PART_LUKS="${DISK}2"
@@ -31,7 +26,14 @@ if echo "$DISK" | grep -qE "nvme|mmcblk"; then
     PART_LUKS="${DISK}p2"
 fi
 
-[ -b "$PART_ESP"  ] || { echo "quay: error: esp partition $PART_ESP not found";  exit 1; }
+# wait for device nodes
+for i in $(seq 1 10); do
+    [ -b "$PART_ESP" ] && [ -b "$PART_LUKS" ] && break
+    mdev -s 2>/dev/null || true
+    sleep 1
+done
+
+[ -b "$PART_ESP"  ] || { ls -l /dev/vd*; echo "quay: error: esp partition $PART_ESP not found";  exit 1; }
 [ -b "$PART_LUKS" ] || { echo "quay: error: luks partition $PART_LUKS not found"; exit 1; }
 
 # ensure clean partition
