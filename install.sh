@@ -18,7 +18,7 @@ set -e
 
 # fulfill host dependencies
 printf "quay: fulfilling host dependencies...\n"
-apk add -q cryptsetup util-linux dosfstools xfsprogs binutils mkinitfs pciutils
+apk add -q cryptsetup util-linux dosfstools xfsprogs binutils mkinitfs pciutils eudev
 udevadm settle
 
 # execute steps sequentially in a single shell session
