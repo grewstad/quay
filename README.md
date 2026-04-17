@@ -6,81 +6,77 @@
    ( ._> //     
     `----'  
 ```
+
 ![Version](https://img.shields.io/badge/version-v3.19-blue?style=flat-square) ![Arch](https://img.shields.io/badge/arch-x86__64-orange?style=flat-square) ![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)
 
-an alpine distro with an optimized uki for hosting virtual machines.
+An Alpine-based minimalist L0 hypervisor primitive. Designed for high-performance guest hosting with a zero-cleverness, traceable architecture.
 
 ---
 
-## description
-quay is a minimal installation pattern that runs from ram and consolidates host configuration, kernel, and initramfs into a single uki binary.
+## Description
 
-### small
+Quay is a diskless Alpine Linux installation pattern that boots from a single Unified Kernel Image (UKI). It prioritizes deterministic behavior and standard Linux primitives over complex magic.
 
-install media is less than 60mb. 
+### Minimalist
+Install media is ~60MB. The system runs entirely from RAM, ensuring a clean state on every boot.
 
-### simple
+### Traceable
+No brittle kernel magic strings. LUKS unlocking and filesystem mounting are handled by standard OpenRC services (`dmcrypt`, `localmount`).
 
-driven by quay.conf using alpine primitives.
-
-### secure
-
-luks2 encryption and iommu/vfio isolation.
+### Hardened
+LUKS2 encryption, IOMMU/VFIO hardware isolation, and a minimal attack surface.
 
 ---
 
-## installation
+## Installation
 
-manufacture induction media:
+1. Prepare your environment (UEFI required).
+2. Configure the installer:
+   ```bash
+   cp quay.conf.example quay.conf
+   vi quay.conf
+   ```
+3. Run the induction pipeline:
+   ```bash
+   sh install.sh
+   ```
 
-    sh builder/build-iso.sh
+### Technical Induction Stages
 
-boot media in uefi mode:
+**01 Disk**. GPT partitioning (1GB ESP + Storage), LUKS2 formatting, and XFS creation.
 
-    cp quay.conf.example quay.conf
-    vi quay.conf
-    sh install.sh
+**02 System**. Identity configuration, package fulfillment (QEMU, Bridge, SSH), and hardened networking.
 
-<details>
-<summary>technical induction stages (00-05)</summary>
+**03 Boot**. UKI forging (Kernel + Initramfs + CMDLINE) and UEFI firmware registration.
 
-**00 preflight**. environment verification and primitive setup.
-
-**01 storage**. luks2 foundation and xfs core-matched tuning.
-
-**02 system**. identity, lbu seeding, and nftables.
-
-**03 tuned**. kvm halt polling and scheduler tuning.
-
-**04 boot**. uki creation and efi registration.
-
-**05 persistence**. final lbu commit.
-
-</details>
+**04 Persistence**. Explicit service configuration (`dmcrypt`, `localmount`) and initial LBU commit.
 
 ---
 
-## configuration
-params defined in quay.conf:
+## Configuration
 
-**disk**. target device for installation.
+Parameters are defined in `quay.conf`:
 
-**luks_password**. passphrase for the volume.
-
-**isolcpus**. cores for guest execution.
-
-**hugepages**. 2mb pages for allocation.
-
-**vfio_ids**. pci ids for passthrough.
-
----
-
-## persistence
-quay operates in diskless mode. to save changes:
-
-    lbu commit
+- **DISK**: Target device (e.g., `/dev/nvme0n1`).
+- **HOSTNAME**: System identity.
+- **NIC**: Primary network interface for the bridge.
+- **LUKS_PASSWORD**: Passphrase for the persistent volume.
+- **ISOLCPUS**: (Optional) Cores for isolated guest execution.
+- **HUGEPAGES**: (Optional) Number of 2MB pages for performance.
+- **VFIO_IDS**: (Optional) PCI IDs for hardware passthrough.
 
 ---
 
-## license
-mit
+## Persistence
+
+Quay operates in diskless mode. Configuration changes in `/etc` are saved to the encrypted volume via:
+
+```bash
+lbu commit
+```
+
+---
+
+## License
+
+MIT

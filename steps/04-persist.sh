@@ -3,18 +3,25 @@ set -e
 
 # 04-persist.sh — persistence, security, and initial lbu commit
 
-# LUKS is already opened in initramfs by cryptroot=
-# so we just need to ensure it is in fstab for localmount
+# discover partitions and open storage
+[ -b /dev/mapper/quay ] || { echo "quay: opening storage..."; echo -n "$LUKS_PASSWORD" | cryptsetup open "$PART_LUKS" quay -; }
+mkdir -p /mnt/storage /mnt/quay_esp
+mount -t xfs /dev/mapper/quay /mnt/storage 2>/dev/null || true
+mount "$PART_ESP" /mnt/quay_esp 2>/dev/null || true
+
+# configure dmcrypt and localmount for future boots
+printf 'target=quay\nsource=UUID=%s\n' "$LUKS_UUID" > /etc/conf.d/dmcrypt
+rc-update add dmcrypt boot
 echo "/dev/mapper/quay /mnt/storage xfs defaults 0 0" >> /etc/fstab
-mkdir -p /mnt/storage
 rc-update add localmount boot
 
-# lbu and apk cache on persistent storage
-mkdir -p /mnt/storage/cache
-setup-lbu /mnt/storage
+# setup lbu on ESP (small config) and apk cache on storage (large binaries)
+mkdir -p /mnt/quay_esp/cache
+echo "/dev/disk/by-label/QUAY_ESP /mnt/quay_esp vfat defaults 0 0" >> /etc/fstab
+setup-lbu /mnt/quay_esp
 setup-apkcache /mnt/storage/cache
 cat > /etc/lbu/lbu.conf <<EOF
-LBU_MEDIA=storage
+LBU_MEDIA=QUAY_ESP
 BACKUP_LIMIT=3
 EOF
 

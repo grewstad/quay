@@ -1,0 +1,12 @@
+# Ignore large binaries and test artifacts
+quay-test/*.iso
+quay-test/*.qcow2
+quay-test/*.fd
+quay-test/boot/
+quay-test/serial.log
+quay-test/quay-src.img
+
+# Ignore local config
+quay.conf
+/mnt/
+EOF

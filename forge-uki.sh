@@ -15,20 +15,19 @@ WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
 # locate primitives
-STUB=$(find /usr/lib /usr/share -name "linuxx64.efi.stub" 2>/dev/null | head -1)
-KERNEL=$(find /boot -name "vmlinuz*" | head -1)
+STUB=$(find /usr/lib /usr/share /media/cdrom/boot -name "linuxx64.efi.stub" 2>/dev/null | head -1)
+KERNEL=$(find /boot /media/cdrom/boot -name "vmlinuz*" 2>/dev/null | head -1)
 OSREL="/etc/os-release"
 
 [ -n "$STUB"   ] || { echo "quay: forge: linuxx64.efi.stub not found"; exit 1; }
-[ -n "$KERNEL" ] || { echo "quay: forge: no kernel in /boot";          exit 1; }
+[ -n "$KERNEL" ] || { echo "quay: forge: no kernel found in /boot or ISO"; exit 1; }
 
 # cmdline
 IOMMU="intel_iommu=on"
 grep -qi "amd" /proc/cpuinfo && IOMMU="amd_iommu=on"
 
-# core cmdline: includes cryptroot and apkovl for stateless persistence
-CMDLINE="modules=loop,squashfs,sd-mod,usb-storage,xfs quiet loglevel=3 $IOMMU iommu=pt"
-CMDLINE="$CMDLINE cryptroot=UUID=$LUKS_UUID cryptdm=quay apkovl=LABEL=QUAY"
+# core cmdline: minimal and traceable, logic moves to openrc services
+CMDLINE="modules=loop,squashfs,sd-mod,usb-storage,xfs quiet loglevel=3 $IOMMU iommu=pt console=tty0 console=ttyS0,115200 apkovl=LABEL=QUAY_ESP"
 
 [ -n "$ISOLCPUS"  ] && CMDLINE="$CMDLINE isolcpus=$ISOLCPUS nohz_full=$ISOLCPUS rcu_nocbs=$ISOLCPUS"
 [ -n "$HUGEPAGES" ] && CMDLINE="$CMDLINE hugepagesz=2M hugepages=$HUGEPAGES"

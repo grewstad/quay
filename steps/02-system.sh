@@ -29,10 +29,9 @@ iface br0 inet dhcp
 EOF
 
 [ -n "$ROOT_PASSWORD" ] && echo "root:${ROOT_PASSWORD}" | chpasswd
-[ -n "$ROOT_PASSWORD" ] && echo "root:${ROOT_PASSWORD}" | chpasswd
-apk add --quiet qemu-system-x86_64 qemu-img bridge-utils iproute2 \
-                cryptsetup xfsprogs efibootmgr binutils nftables \
-                openssh linux-lts
+apk add --no-cache qemu-system-x86_64 qemu-img bridge-utils iproute2 \
+                cryptsetup cryptsetup-openrc xfsprogs efibootmgr nftables \
+                openssh linux-firmware-none
 
 # hardened sshd_config heredoc — removes external template dependency
 mkdir -p /etc/ssh
