@@ -16,11 +16,16 @@ EOF
 udevadm settle 2>/dev/null || sleep 2
 
 # discover partitions
-PART_ESP=$(lsblk -pno PATH,PARTTYPE "$DISK" | awk '/c12a7328/{print $1}' | head -1)
-PART_LUKS=$(lsblk -pno PATH,PARTTYPE "$DISK" | awk '/ca7d7ccb/{print $1}' | head -1)
+PART_ESP="${DISK}1"
+PART_LUKS="${DISK}2"
+# handle nvme/mmcblk (p1, p2)
+if echo "$DISK" | grep -qE "nvme|mmcblk"; then
+    PART_ESP="${DISK}p1"
+    PART_LUKS="${DISK}p2"
+fi
 
-[ -n "$PART_ESP"  ] || { echo "quay: error: esp partition not found";  exit 1; }
-[ -n "$PART_LUKS" ] || { echo "quay: error: luks partition not found"; exit 1; }
+[ -b "$PART_ESP"  ] || { echo "quay: error: esp partition $PART_ESP not found";  exit 1; }
+[ -b "$PART_LUKS" ] || { echo "quay: error: luks partition $PART_LUKS not found"; exit 1; }
 
 # luks2 format and open
 echo -n "$LUKS_PASSWORD" | cryptsetup luksFormat --type luks2 \
