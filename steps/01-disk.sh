@@ -3,9 +3,13 @@ set -e
 
 # 01-disk.sh — partition, luks2 format, xfs inside
 
+# cleanup previous attempts
+cryptsetup close quay 2>/dev/null || true
+umount -f "$DISK"* 2>/dev/null || true
+
 # partition: 1GB esp, rest storage
 # uses standard LUKS guid: CA7D7CCB-63ED-4C53-861C-1742536059CC
-sfdisk --wipe always --label gpt "$DISK" <<EOF
+sfdisk --wipe always --force --label gpt "$DISK" <<EOF
 label: gpt
 device: $DISK
 
