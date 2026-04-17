@@ -18,6 +18,7 @@ set -e
 
 # fulfill host dependencies
 printf "quay: fulfilling host dependencies...\n"
+mount -o remount,size=2G / || true
 apk add -q cryptsetup util-linux dosfstools xfsprogs binutils mkinitfs pciutils eudev
 udevadm settle
 
