@@ -16,6 +16,11 @@ set -e
 [ -n "$LUKS_PASSWORD" ] || { echo "quay: LUKS_PASSWORD not set"; exit 1; }
 [ -b "$DISK"          ] || { echo "quay: $DISK is not a block device"; exit 1; }
 
+# fulfill host dependencies
+printf "quay: fulfilling host dependencies...\n"
+apk add -q cryptsetup util-linux dosfstools xfsprogs binutils mkinitfs pciutils
+udevadm settle
+
 # execute steps sequentially in a single shell session
 printf "quay: 01-disk...\n"   ; . steps/01-disk.sh
 printf "quay: 02-system...\n" ; . steps/02-system.sh
