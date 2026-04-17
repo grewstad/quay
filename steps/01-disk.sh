@@ -27,8 +27,12 @@ fi
 [ -b "$PART_ESP"  ] || { echo "quay: error: esp partition $PART_ESP not found";  exit 1; }
 [ -b "$PART_LUKS" ] || { echo "quay: error: luks partition $PART_LUKS not found"; exit 1; }
 
+# ensure clean partition
+wipefs -af "$PART_LUKS"
+sleep 2
+
 # luks2 format and open
-echo -n "$LUKS_PASSWORD" | cryptsetup luksFormat --type luks2 \
+echo -n "$LUKS_PASSWORD" | cryptsetup luksFormat -q --type luks2 \
     -c aes-xts-plain64 -s 512 --hash sha512 "$PART_LUKS" -
 echo -n "$LUKS_PASSWORD" | cryptsetup open "$PART_LUKS" quay -
 
