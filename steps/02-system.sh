@@ -4,7 +4,6 @@ set -e
 # 02-system.sh — configure base alpine and hypervisor environment
 
 # install base system and hypervisor primitives using non-interactive setup tools
-setup-keymap us us
 setup-hostname -n "$HOSTNAME"
 setup-timezone -z UTC
 printf "nameserver 1.1.1.1\n" > /etc/resolv.conf
