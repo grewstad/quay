@@ -31,9 +31,11 @@ EOF
 [ -n "$ROOT_PASSWORD" ] && echo "root:${ROOT_PASSWORD}" | chpasswd
 [ -n "$ROOT_PASSWORD" ] && echo "root:${ROOT_PASSWORD}" | chpasswd
 apk add --quiet qemu-system-x86_64 qemu-img bridge-utils iproute2 \
-                cryptsetup xfsprogs efibootmgr binutils nftables
+                cryptsetup xfsprogs efibootmgr binutils nftables \
+                openssh linux-lts
 
 # hardened sshd_config heredoc — removes external template dependency
+mkdir -p /etc/ssh
 cat > /etc/ssh/sshd_config <<EOF
 Port 22
 Protocol 2
