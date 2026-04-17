@@ -24,6 +24,10 @@ VFIO_IDS=""       # pci ids for passthrough (e.g. "10de:2684,10de:228b")
 # secure boot — requires keys in /etc/quay/
 SIGN_UKI=0
 
+# firmware — default is standard hardware baseline (~200MB)
+# you can manually add specific ones to steps/02-system.sh if needed
+# FIRMWARE="standard"
+
 # alpine repos
 ALPINE_VERSION="v3.21"
 REPOS="https://dl-cdn.alpinelinux.org/alpine"

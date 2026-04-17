@@ -29,9 +29,13 @@ iface br0 inet dhcp
 EOF
 
 [ -n "$ROOT_PASSWORD" ] && echo "root:${ROOT_PASSWORD}" | chpasswd
+# establish host system: standard hardware baseline
+# we avoid the 1GB 'all' collection to survive tmpfs, focusing on 95% common hardware
+FW_BASELINE="intel-microcode amd-microcode linux-firmware-intel linux-firmware-amdgpu linux-firmware-nvidia linux-firmware-bnx2 linux-firmware-bnx2x linux-firmware-rtl_nic linux-firmware-i915"
+
 apk add --no-cache qemu-system-x86_64 qemu-img bridge-utils iproute2 \
                 cryptsetup cryptsetup-openrc xfsprogs efibootmgr nftables \
-                openssh linux-firmware-none
+                openssh $FW_BASELINE
 
 # hardened sshd_config heredoc — removes external template dependency
 mkdir -p /etc/ssh
