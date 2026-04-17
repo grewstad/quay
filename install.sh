@@ -19,7 +19,7 @@ set -e
 # fulfill host dependencies
 printf "quay: fulfilling host dependencies...\n"
 mount -o remount,size=3G / || true
-apk add --no-cache cryptsetup util-linux dosfstools xfsprogs binutils mkinitfs pciutils eudev
+apk add --no-cache cryptsetup util-linux dosfstools xfsprogs binutils mkinitfs pciutils eudev systemd-efistub
 udevadm settle
 
 # execute steps sequentially in a single shell session

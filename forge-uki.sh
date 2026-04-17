@@ -15,7 +15,7 @@ WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
 # locate primitives
-STUB=$(find /usr/lib /usr/share /media/cdrom/boot -name "linuxx64.efi.stub" 2>/dev/null | head -1)
+STUB=$(find /usr/lib/systemd/boot/efi /usr/lib /usr/share /media/cdrom/boot -name "linuxx64.efi.stub" 2>/dev/null | head -1)
 KERNEL=$(find /boot /media/cdrom/boot -name "vmlinuz*" 2>/dev/null | head -1)
 OSREL="/etc/os-release"
 
