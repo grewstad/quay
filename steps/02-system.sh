@@ -3,10 +3,16 @@ set -e
 
 # 02-system.sh — configure base alpine and hypervisor environment
 
-cat > /tmp/answers <<EOF
-KEYMAPOPTS="us us"
-HOSTNAMEOPTS="-n $HOSTNAME"
-INTERFACESOPTS="auto lo
+# install base system and hypervisor primitives using non-interactive setup tools
+setup-keymap us us
+setup-hostname -n "$HOSTNAME"
+setup-timezone -z UTC
+setup-dns -n 1.1.1.1
+setup-apkrepos dl-cdn.alpinelinux.org # standardized mirror
+
+# networking: configure bridge br0 containing $NIC
+cat > /etc/network/interfaces <<EOF
+auto lo
 iface lo inet loopback
 
 auto $NIC
@@ -17,19 +23,9 @@ iface br0 inet dhcp
     bridge_ports $NIC
     bridge_stp off
     bridge_fd 0
-"
-DNSOPTS="-n 1.1.1.1"
-TIMEZONEOPTS="-z ${TIMEZONE:-UTC}"
-PROXYOPTS="none"
-APKREPOSOPTS="$REPOS/$ALPINE_VERSION/main $REPOS/$ALPINE_VERSION/community"
-SSHDOPTS="-c openssh"
-NTPOPTS="-c chrony"
-DISKOPTS="none"
-LBUOPTS="none"
 EOF
 
-# install base system and hypervisor primitives
-setup-alpine -f /tmp/answers
+[ -n "$ROOT_PASSWORD" ] && echo "root:${ROOT_PASSWORD}" | chpasswd
 [ -n "$ROOT_PASSWORD" ] && echo "root:${ROOT_PASSWORD}" | chpasswd
 apk add --quiet qemu-system-x86_64 qemu-img bridge-utils iproute2 \
                 cryptsetup xfsprogs efibootmgr binutils nftables
