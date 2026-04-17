@@ -1,0 +1,29 @@
+# quay.conf — copy to quay.conf, fill in, then run install.sh
+
+# target disk — entire disk will be wiped
+DISK="/dev/nvme0n1"
+
+# system identity
+HOSTNAME="quay"
+TIMEZONE="UTC"
+
+# physical nic to bridge vms through (e.g. eth0, enp3s0)
+NIC="eth0"
+
+# luks passphrase for the storage partition
+LUKS_PASSWORD=""
+
+# your ssh public key (paste full ssh-ed25519 ... line)
+SSH_PUBKEY=""
+
+# hypervisor tuning — leave blank to skip
+ISOLCPUS=""       # cores to isolate (e.g. "2-7")
+HUGEPAGES="512"   # 2MB hugepages (512 = 1GB)
+VFIO_IDS=""       # pci ids for passthrough (e.g. "10de:2684,10de:228b")
+
+# secure boot — requires keys in /etc/quay/
+SIGN_UKI=0
+
+# alpine repos
+ALPINE_VERSION="v3.21"
+REPOS="https://dl-cdn.alpinelinux.org/alpine"
