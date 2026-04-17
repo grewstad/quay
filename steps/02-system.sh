@@ -7,8 +7,12 @@ set -e
 setup-keymap us us
 setup-hostname -n "$HOSTNAME"
 setup-timezone -z UTC
-setup-dns -n 1.1.1.1
-setup-apkrepos dl-cdn.alpinelinux.org # standardized mirror
+printf "nameserver 1.1.1.1\n" > /etc/resolv.conf
+
+# enable repos (main + community)
+REL=$(cut -d. -f1,2 /etc/alpine-release)
+printf "https://dl-cdn.alpinelinux.org/alpine/v${REL}/main\nhttps://dl-cdn.alpinelinux.org/alpine/v${REL}/community\n" > /etc/apk/repositories
+apk update
 
 # networking: configure bridge br0 containing $NIC
 cat > /etc/network/interfaces <<EOF
