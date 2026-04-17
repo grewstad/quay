@@ -37,12 +37,18 @@ done
 [ -b "$PART_LUKS" ] || { echo "quay: error: luks partition $PART_LUKS not found"; exit 1; }
 
 # ensure clean partition
-wipefs -af "$PART_LUKS"
+for i in $(seq 1 5); do
+    wipefs -af "$PART_LUKS" && break
+    sleep 1
+done
+mdev -s 2>/dev/null || true
 sleep 2
 
 # luks2 format and open
 echo -n "$LUKS_PASSWORD" | cryptsetup luksFormat -q --type luks2 \
     -c aes-xts-plain64 -s 512 --hash sha512 "$PART_LUKS" -
+mdev -s 2>/dev/null || true
+sleep 1
 echo -n "$LUKS_PASSWORD" | cryptsetup open "$PART_LUKS" quay -
 
 # filesystems
