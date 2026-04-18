@@ -56,19 +56,15 @@ touch "$WORK/initrd"
 [ -f /boot/amd-ucode.img   ] && cat /boot/amd-ucode.img   >> "$WORK/initrd"
 cat "$WORK/initramfs-base" >> "$WORK/initrd"
 
-# section layout
-align_4k() { echo "$(( ($1 + 4095) / 4096 * 4096 ))"; }
-VMA_OSREL=65536
-VMA_CMDL=$(( VMA_OSREL + $(align_4k "$(stat -c%s "$OSREL")") ))
-VMA_KERN=$(( VMA_CMDL  + $(align_4k "$(stat -c%s "$WORK/cmdline")") + 4096 ))
-VMA_INIT=$(( VMA_KERN  + $(align_4k "$(stat -c%s "$KERNEL")") + 4096 ))
-
-objcopy \
-    --add-section .osrel="$OSREL"           --change-section-vma ".osrel=$VMA_OSREL" \
-    --add-section .cmdline="$WORK/cmdline"  --change-section-vma ".cmdline=$VMA_CMDL" \
-    --add-section .linux="$KERNEL"          --change-section-vma ".linux=$VMA_KERN" \
-    --add-section .initrd="$WORK/initrd"    --change-section-vma ".initrd=$VMA_INIT" \
-    "$STUB" "$WORK/quay.efi"
+# build UKI using standard primitive
+# efi-mkuki handles VMA offsets, alignment, and PE header updates correctly
+efi-mkuki \
+    -o "$WORK/quay.efi" \
+    --kernel "$KERNEL" \
+    --initrd "$WORK/initrd" \
+    --cmdline "$(cat "$WORK/cmdline")" \
+    --osrel "$OSREL" \
+    --stub "$STUB"
 
 if [ "${SIGN_UKI:-0}" = "1" ]; then
     [ -f /etc/quay/db.key ] || { echo "quay: forge: keys not found in /etc/quay/"; exit 1; }

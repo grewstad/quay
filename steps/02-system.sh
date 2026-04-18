@@ -69,9 +69,9 @@ grep -qi "amd" /proc/cpuinfo && UCODE="amd-ucode"
 apk add --no-cache \
     qemu-system-x86_64 qemu-img \
     iproute2 \
-    cryptsetup cryptsetup-openrc \
-    xfsprogs binutils \
-    nftables \
+    cryptsetup util-linux dosfstools xfsprogs \
+    binutils mkinitfs efibootmgr efi-mkuki \
+    systemd-boot-efistub chrony nftables \
     ovmf \
     $UCODE
 
