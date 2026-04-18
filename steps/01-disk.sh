@@ -13,7 +13,9 @@ wipefs -a "$DISK"
 sync
 
 # gpt: 1GB esp + rest luks
-sfdisk --wipe always --force --label gpt "$DISK" <<EOF
+# we don't use --wipe always because it's racy on partitioned disks in scripts;
+# we handle wiping manually after the nodes appear.
+sfdisk --force "$DISK" <<EOF
 label: gpt
 device: $DISK
 
@@ -40,6 +42,11 @@ i=0; while [ $i -lt 15 ]; do
 done
 [ -b "$PART_ESP"  ] || { echo "quay: $PART_ESP not found";  exit 1; }
 [ -b "$PART_LUKS" ] || { echo "quay: $PART_LUKS not found"; exit 1; }
+
+# wipe the new partitions manually to be safe (since we removed sfdisk --wipe)
+wipefs -a "$PART_ESP"
+wipefs -a "$PART_LUKS"
+sync
 
 # luks2: aes-xts-plain64, 512bit key, sha512
 echo -n "$LUKS_PASSWORD" | cryptsetup luksFormat -q --type luks2 \
