@@ -18,7 +18,7 @@ STUB=$(find /usr/lib/systemd/boot/efi -name "linuxx64.efi.stub" 2>/dev/null | he
 [ -z "$STUB" ] && STUB=$(find /usr/lib/gummiboot -name "linuxx64.efi.stub" 2>/dev/null | head -1)
 [ -z "$STUB" ] && STUB=$(find /usr/lib /usr/share -name "linuxx64.efi.stub" 2>/dev/null | head -1)
 
-KERNEL=$(find /boot -name "vmlinuz-lts" 2>/dev/null | head -1)
+KERNEL=$(find /boot /media -name "vmlinuz-lts" 2>/dev/null | head -1)
 OSREL="/etc/os-release"
 
 [ -n "$STUB"   ] || { echo "quay: forge: linuxx64.efi.stub not found — install systemd-efistub or gummiboot-efistub"; exit 1; }
