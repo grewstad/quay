@@ -17,17 +17,17 @@ set -e
 [ -n "$ROOT_PASSWORD" ] || { echo "quay: ROOT_PASSWORD not set"; exit 1; }
 [ -b "$DISK"          ] || { echo "quay: $DISK is not a block device"; exit 1; }
 
-# grow tmpfs to fit firmware download
-mount -o remount,size=3G / 2>/dev/null || true
+# 4G: headroom for qemu + ovmf + other packages during install
+# firmware is now fetched directly to encrypted storage, not loaded here
+mount -o remount,size=4G / 2>/dev/null || true
 
 # preflight deps
 apk add -q cryptsetup util-linux dosfstools xfsprogs binutils mkinitfs efibootmgr
 
-# efistub — systemd-efistub is the current package name on alpine 3.22+
-# fall back to gummiboot-efistub on older releases
+# efistub: systemd-efistub on alpine 3.22+, gummiboot-efistub on older
 apk add -q systemd-efistub 2>/dev/null || apk add -q gummiboot-efistub
 
-udevadm settle 2>/dev/null || true
+mdev -s 2>/dev/null || true
 
 printf "quay: 01-disk...\n"   ; . steps/01-disk.sh
 printf "quay: 02-system...\n" ; . steps/02-system.sh
