@@ -8,7 +8,7 @@ setup-timezone -z "${TIMEZONE:-UTC}"
 printf "nameserver 1.1.1.1\n" > /etc/resolv.conf
 
 # repos — use standard alpine primitive to pick fastest mirror
-setup-apkrepos -1
+setup-apkrepos -c -1
 apk update -q
 
 # root password for console access

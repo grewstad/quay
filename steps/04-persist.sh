@@ -31,11 +31,11 @@ rc-update add local default
 # during initramfs boot, alpine reinstalls packages from /etc/apk/world BEFORE
 # luks is open. the cache must be on the esp (/media/QUAY_ESP) which is
 # accessible without luks. cache on the luks partition = zero packages after boot.
-mkdir -p /mnt/quay_esp/cache
+mkdir -p /media/QUAY_ESP/cache
 setup-apkcache /media/QUAY_ESP
 
 # lbu on ESP — apkovl readable without LUKS at boot
-setup-lbu /mnt/quay_esp
+setup-lbu /media/QUAY_ESP
 cat > /etc/lbu/lbu.conf <<EOF
 LBU_MEDIA=QUAY_ESP
 BACKUP_LIMIT=3

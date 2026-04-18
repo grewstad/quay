@@ -8,22 +8,22 @@ set -e
 
 sh ./forge-uki.sh "$LUKS_UUID"
 
-mkdir -p /mnt/quay_esp
-mount "$PART_ESP" /mnt/quay_esp
-mkdir -p /mnt/quay_esp/EFI/Linux /mnt/quay_esp/EFI/BOOT /mnt/quay_esp/boot
+mkdir -p /media/QUAY_ESP
+mount "$PART_ESP" /media/QUAY_ESP
+mkdir -p /media/QUAY_ESP/EFI/Linux /media/QUAY_ESP/EFI/BOOT /media/QUAY_ESP/boot
 
 # modloop: squashfs containing the full kernel module tree
 # alpine's initramfs mounts this to populate /lib/modules at boot
 # search all of /media — alpine may mount the iso at /media/cdrom, /media/vdb, etc.
 # depending on how the iso is presented to the system
-cp /media/cdrom/boot/modloop-lts /mnt/quay_esp/boot/modloop-lts 2>/dev/null \
+cp /media/cdrom/boot/modloop-lts /media/QUAY_ESP/boot/modloop-lts 2>/dev/null \
     || find /media /boot -name "modloop-lts" 2>/dev/null \
-        | head -1 | xargs -I{} cp {} /mnt/quay_esp/boot/modloop-lts \
+        | head -1 | xargs -I{} cp {} /media/QUAY_ESP/boot/modloop-lts \
     || { echo "quay: modloop-lts not found — is the alpine iso mounted?"; exit 1; }
 
-cp ./quay.efi /mnt/quay_esp/EFI/BOOT/BOOTX64.EFI
-cp ./quay.efi /mnt/quay_esp/EFI/Linux/quay.efi
-umount /mnt/quay_esp
+cp ./quay.efi /media/QUAY_ESP/EFI/BOOT/BOOTX64.EFI
+cp ./quay.efi /media/QUAY_ESP/EFI/Linux/quay.efi
+umount /media/QUAY_ESP
 
 # register UEFI boot entry if efivars are accessible
 if [ -d /sys/firmware/efi/efivars ]; then
