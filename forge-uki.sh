@@ -58,13 +58,14 @@ cat "$WORK/initramfs-base" >> "$WORK/initrd"
 
 # build UKI using standard primitive
 # efi-mkuki handles VMA offsets, alignment, and PE header updates correctly
+# build UKI using standard primitive
+# efi-mkuki handles VMA offsets, alignment, and PE header updates correctly
 efi-mkuki \
     -o "$WORK/quay.efi" \
-    --kernel "$KERNEL" \
-    --initrd "$WORK/initrd" \
-    --cmdline "$(cat "$WORK/cmdline")" \
-    --osrel "$OSREL" \
-    --stub "$STUB"
+    -c "$WORK/cmdline" \
+    -r "$OSREL" \
+    -S "$STUB" \
+    "$KERNEL" "$WORK/initrd"
 
 if [ "${SIGN_UKI:-0}" = "1" ]; then
     [ -f /etc/quay/db.key ] || { echo "quay: forge: keys not found in /etc/quay/"; exit 1; }
