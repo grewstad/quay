@@ -7,27 +7,25 @@ set -e
 cryptsetup close quay 2>/dev/null || true
 umount -f /mnt/storage /mnt/quay_esp 2>/dev/null || true
 
-# wipe all signatures from the whole disk BEFORE partitioning
-wipefs -a "$DISK"
-sync
+# silence the kernel hotplug dispatcher during all disk operations.
+# mdev fires on every uevent; if it races sfdisk's BLKRRPART ioctl,
+# the kernel returns EBUSY. disabling hotplug eliminates the race entirely.
+echo "" > /proc/sys/kernel/hotplug
 
-# gpt: 1GB esp + rest luks
-# --wipe-partitions always: clears signatures on the new partition regions right as
-# sfdisk creates them — this is the flag alpine's own setup-disk uses.
-# NOT --wipe always (whole disk wipe mid-script = race) or --lock (busybox mdev
-# does not implement the flock udev locking protocol, so --lock does nothing here).
-sfdisk --force --wipe-partitions always "$DISK" <<EOF
+wipe_and_partition() {
+    wipefs -a "$DISK"
+    sync
+
+    sfdisk --force "$DISK" <<EOF
 label: gpt
 device: $DISK
 
 1 : size=1024M, type=c12a7328-f81f-11d2-ba4b-00a0c93ec93b, name="ESP"
 2 : size=+,     type=ca7d7ccb-63ed-4c53-861c-1742536059cc, name="LUKS"
 EOF
+}
 
-# rescan: mdev -s is how alpine populates /dev after partition table changes.
-# blockdev --rereadpt can fail if the new nodes aren't ready yet; mdev -s
-# reads /sys/block directly and creates the nodes regardless.
-mdev -s 2>/dev/null || true
+wipe_and_partition
 
 # partition naming: nvme/mmcblk use p1/p2, others use 1/2
 if echo "$DISK" | grep -qE "nvme|mmcblk"; then
@@ -38,10 +36,15 @@ else
     PART_LUKS="${DISK}2"
 fi
 
-# wait for device nodes (mdev -s should have created them, but virtio can lag)
+# re-arm hotplug and rescan — mdev now reads /sys/block cleanly
+# without any competing writes, so the new nodes appear immediately
+echo /sbin/mdev > /proc/sys/kernel/hotplug
+mdev -s
+
+# wait for device nodes
 i=0; while [ $i -lt 15 ]; do
     [ -b "$PART_ESP" ] && [ -b "$PART_LUKS" ] && break
-    mdev -s 2>/dev/null || true; sleep 1; i=$((i+1))
+    sleep 1; i=$((i+1))
 done
 [ -b "$PART_ESP"  ] || { echo "quay: $PART_ESP not found";  exit 1; }
 [ -b "$PART_LUKS" ] || { echo "quay: $PART_LUKS not found"; exit 1; }
