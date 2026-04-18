@@ -15,6 +15,11 @@ device: $DISK
 2 : size=+,     type=ca7d7ccb-63ed-4c53-861c-1742536059cc, name="LUKS"
 EOF
 
+# force kernel to re-read partition table and sync
+sync
+blockdev --rereadpt "$DISK" 2>/dev/null || true
+sync
+
 # partition naming: nvme/mmcblk use p1/p2, others use 1/2
 if echo "$DISK" | grep -qE "nvme|mmcblk"; then
     PART_ESP="${DISK}p1"
@@ -24,15 +29,16 @@ else
     PART_LUKS="${DISK}2"
 fi
 
-# wait for device nodes
-i=0; while [ $i -lt 10 ]; do
+# wait for device nodes with increased resilience
+i=0; while [ $i -lt 15 ]; do
     [ -b "$PART_ESP" ] && [ -b "$PART_LUKS" ] && break
     mdev -s 2>/dev/null || true; sleep 1; i=$((i+1))
 done
 [ -b "$PART_ESP"  ] || { echo "quay: $PART_ESP not found";  exit 1; }
 [ -b "$PART_LUKS" ] || { echo "quay: $PART_LUKS not found"; exit 1; }
 
-wipefs -af "$PART_LUKS"
+# sfdisk --wipe always handled the headers; extra wipefs often causes race busy errors
+sync
 
 # luks2: aes-xts-plain64, 512bit key, sha512
 echo -n "$LUKS_PASSWORD" | cryptsetup luksFormat -q --type luks2 \
