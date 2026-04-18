@@ -13,9 +13,9 @@ wipefs -a "$DISK"
 sync
 
 # gpt: 1GB esp + rest luks
-# we don't use --wipe always because it's racy on partitioned disks in scripts;
-# we handle wiping manually after the nodes appear.
-sfdisk --force "$DISK" <<EOF
+# --lock: acquires exclusive flock(2) on the disk before writing.
+# mdev/udev respect this lock and skip probing, eliminating the BLKRRPART EBUSY race.
+sfdisk --lock --force "$DISK" <<EOF
 label: gpt
 device: $DISK
 
@@ -23,6 +23,9 @@ device: $DISK
 2 : size=+,     type=ca7d7ccb-63ed-4c53-861c-1742536059cc, name="LUKS"
 EOF
 
+# belt-and-suspenders: force the kernel to adopt the new table
+# sfdisk --lock should have handled the ioctl cleanly, but on virtio+mdev
+# the kernel sometimes needs a second nudge before the nodes appear.
 blockdev --rereadpt "$DISK" 2>/dev/null || true
 sync
 
@@ -43,9 +46,9 @@ done
 [ -b "$PART_ESP"  ] || { echo "quay: $PART_ESP not found";  exit 1; }
 [ -b "$PART_LUKS" ] || { echo "quay: $PART_LUKS not found"; exit 1; }
 
-# wipe the new partitions manually to be safe (since we removed sfdisk --wipe)
-wipefs -a "$PART_ESP"
-wipefs -a "$PART_LUKS"
+# wipe partition signatures — at this point the nodes are confirmed stable
+wipefs -af "$PART_ESP"
+wipefs -af "$PART_LUKS"
 sync
 
 # luks2: aes-xts-plain64, 512bit key, sha512
