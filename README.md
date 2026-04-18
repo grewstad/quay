@@ -1,118 +1,155 @@
 # quay
 
-A minimal Alpine Linux installer that turns a blank disk into a KVM hypervisor host.
-
-Alpine runs entirely from RAM. VM images and config live on a LUKS2-encrypted XFS partition. The host is managed via SSH and QEMU directly — no management layer.
-
----
-
-## how it works
-
-```
-UEFI → quay.efi (UKI: kernel + initramfs + cmdline)
-     → Alpine ramdisk init
-     → mounts ESP, loads modloop (kernel modules), restores apkovl (config)
-     → dmcrypt opens LUKS → localmount mounts storage + firmware
-     → sshd, nftables, bridge up
-```
-
-The UKI is a single EFI binary containing the kernel, initramfs, and baked-in kernel parameters. No bootloader, no grub config, no moving parts.
-
-Firmware (`linux-firmware`) lives on the encrypted storage partition and is bind-mounted to `/lib/firmware` at boot. Full hardware compatibility, zero RAM cost.
-
----
-
-## requirements
-
-- UEFI firmware (CSM disabled)
-- IOMMU enabled in firmware (VT-d / AMD-Vi) for passthrough
-- Wired ethernet for the bridge NIC
-
----
-
-## install
-
-Boot the [Alpine Linux Standard ISO](https://alpinelinux.org/downloads/) in UEFI mode.
-
-```sh
-# bring up networking
-ip link set eth0 up && udhcpc -i eth0
-
-# get quay
-apk add git
-git clone https://github.com/grewstad/quay
-cd quay
-
-# configure
-cp quay.conf.example quay.conf
-vi quay.conf
-
-# run
-sh install.sh
-```
-
-After completion: `poweroff`, remove install media, boot.
+Quay is a hypervisor primitive, not an operating system. It is the minimum viable
+layer between UEFI firmware and the virtual machines you actually care about. The
+host is intentionally invisible: Alpine Linux runs entirely from RAM, clean on every
+boot, producing no disk writes and accumulating no state unless you explicitly commit
+it. Everything on disk — VM images, firmware blobs, configuration — lives inside a
+LUKS2-encrypted XFS partition. A single EFI binary boots the entire system. No
+bootloader, no configuration files, no moving parts. The host exists to isolate
+hardware and hand it to VMs. Your actual workloads run inside guests that own the
+hardware directly via VFIO.
 
 ---
 
 ## configuration
 
-`quay.conf` — fill in before running install.sh:
+Copy `quay.conf.example` to `quay.conf`.
 
-| key | description |
-|-----|-------------|
-| `DISK` | target disk, entire device will be wiped |
-| `HOSTNAME` | system hostname |
-| `NIC` | physical NIC for the VM bridge (e.g. `eth0`) |
-| `LUKS_PASSWORD` | passphrase for the encrypted storage partition |
-| `SSH_PUBKEY` | your public key for root login |
-| `ISOLCPUS` | cores to reserve for VMs (e.g. `2-7`) |
-| `HUGEPAGES` | 2MB hugepages to preallocate (e.g. `512` = 1GB) |
-| `VFIO_IDS` | PCI IDs for hardware passthrough (e.g. `10de:2684`) |
+**DISK** (required)
+Target block device (e.g., `/dev/nvme0n1`). Entire disk is wiped.
+
+**ETH_NIC** (required)
+Primary ethernet interface (e.g., `eth0`). Prioritized automatically when plugged (Metric 10).
+
+**WIFI_NIC** (optional)
+Secondary wifi interface (e.g., `wlan0`). Used as failover (Metric 20).
+
+**WIFI_SSID, WIFI_PSK** (optional)
+Wifi credentials for the host failover uplink.
+
+**LUKS_PASSWORD** (required)
+Passphrase for the storage partition. Prompted at every boot.
+
+**ROOT_PASSWORD** (required)
+Password for root console access.
+
+**SSH_PUBKEY** (recommended)
+Authorized public key for remote management.
+
+**ISOLCPUS, HUGEPAGES, VFIO_IDS** (optional)
+Hypervisor tuning parameters for performance and hardware passthrough.
 
 ---
 
-## after first boot
+## networking foundation
 
-LUKS prompts for the passphrase on the serial console. After unlock:
+Quay is a primitive foundation. It does not run network management daemons or host-side NAT. Host uplink failover is managed strictly by kernel routing metrics.
 
-- SSH is available on the physical NIC
-- `br0` is up, ready for VM networking
-- `/mnt/storage` contains your VM images
+### host uplinks
+- **Ethernet**: Automatic high-priority uplink via `ETH_NIC`.
+- **WiFi**: Automatic failover uplink via `WIFI_NIC`.
+- **No services**: Connectivity is managed by standard `ifupdown` and the kernel.
 
-Launch a VM:
-
-```sh
-qemu-system-x86_64 \
-    -enable-kvm -cpu host -smp 4 -m 8G \
-    -drive file=/mnt/storage/vm.qcow2,if=virtio \
-    -netdev bridge,id=n0,br=br0 -device virtio-net,netdev=n0 \
-    -nographic
-```
-
-Save config changes:
-
-```sh
-lbu commit
-```
-
-Rebuild the UKI after changing boot parameters:
-
-```sh
-sh forge-uki.sh <luks-uuid>
-```
+### vm networking
+Quay delegatest connectivity to the hypervisor and the user:
+- **Performance**: Use `-netdev bridge,id=n0,br=br0` to bridge directly to physical Ethernet.
+- **Mobility (WiFi/PnP)**: Use `-netdev user` (slirp). Slirp provides internal DHCP/DNS/NAT to the guest with zero host-side configuration.
 
 ---
 
 ## disk layout
 
 ```
-sdX1   ESP (FAT32, 1GB)    quay.efi, modloop, apkovl
-sdX2   LUKS2 container
-         └─ XFS
-              ├─ firmware/     linux-firmware (bind-mounted to /lib/firmware)
-              ├─ cache/        apk package cache
-              └─ *.qcow2       VM disk images
+sdX1   ESP  FAT32  1GB
+         EFI/Linux/quay.efi      — unified kernel image (kernel + initramfs + cmdline)
+         EFI/BOOT/BOOTX64.EFI   — fallback boot path (same binary)
+         boot/modloop-lts        — kernel module tree (squashfs)
+         hostname.apkovl.tar.gz  — system configuration archive
+         cache/                  — apk package cache
+
+sdX2   LUKS2 container (aes-xts-plain64, 512-bit key, sha512)
+         /dev/mapper/quay  →  XFS (reflink=1)
+           firmware/         linux-firmware bind-mounted to /lib/firmware
+           OVMF_VARS.fd      template for guest uefi variable stores
+           *.qcow2           vm disk images
+```
+
+---
+
+## boot sequence
+
+### installation (alpine iso)
+
+```
+QEMU / physical machine
+  kernel + initramfs loaded directly or from ISO
+  cmdline: alpine_dev=vdb modules=virtio_pci,virtio_blk
+
+user runs install.sh:
+  sources quay.conf, validates disk and passwords
+  apk add: cryptsetup, mkinitfs, efibootmgr, systemd-efistub
+
+  01-disk.sh:
+    wipefs, sfdisk (vda1=ESP, vda2=LUKS)
+    cryptsetup luksFormat, mkfs.fat, mkfs.xfs
+    mounts /mnt/storage
+
+  02-system.sh:
+    sets hostname, timezone, root password
+    installs primitive stack (qemu, ovmf, chrony, wpa_supplicant)
+    configures interfaces with metrics:
+      ETH_NIC (10) | WIFI_NIC (20) | br0 (bridge over ETH_NIC)
+    manages linux-firmware (moves to LUKS, replaces with linux-firmware-none)
+    writes hardened sshd_config
+
+  03-boot.sh:
+    sh forge-uki.sh:
+      prepends microcode to initramfs
+      objcopy assembles quay.efi (UKI)
+    deploys to ESP (EFI/Linux/quay.efi)
+    registers UEFI boot entry
+
+  04-persist.sh:
+    configures dmcrypt and fstab (firmware bind-mount)
+    writes nftables.conf: minimalist input filtering
+    lbu commit (hostname.apkovl.tar.gz)
+
+  poweroff
+```
+
+### installed system
+
+```
+power on
+  UEFI loads quay.efi
+  microcode Mitigates CPU flaws immediately
+  initramfs finds ESP, extracts apkovl
+  reinstalls primitive stack from ESP cache
+
+openrc sysinit/boot:
+  dmcrypt: prompts for passphrase, opens LUKS
+  localmount: mounts storage, bind-mounts firmware
+  networking: eth/wifi uplinks brought up with metrics
+
+openrc default:
+  sshd, nftables (filter), chronyd start
+
+Ready.
+```
+
+---
+
+## running vms
+
+**Server/Performance Workload (Ethernet):**
+```sh
+qemu-system-x86_64 ... -netdev bridge,id=n0,br=br0 -device virtio-net,netdev=n0
+```
+
+**Desktop/Mobile Workload (WiFi/PnP):**
+```sh
+qemu-system-x86_64 ... -netdev user,id=n0 -device virtio-net,netdev=n0
 ```
 
 ---

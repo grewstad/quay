@@ -5,21 +5,28 @@ set -e
 # usage: cp quay.conf.example quay.conf && vi quay.conf && sh install.sh
 
 [ -f quay.conf ] || { echo "quay: quay.conf not found. copy quay.conf.example first."; exit 1; }
-[ "$(id -u)" = "0" ]     || { echo "quay: must run as root";        exit 1; }
-[ -d /sys/firmware/efi ] || { echo "quay: uefi required";           exit 1; }
+[ "$(id -u)" = "0" ]     || { echo "quay: must run as root";              exit 1; }
+[ -d /sys/firmware/efi ] || { echo "quay: uefi required";                 exit 1; }
 
 . ./quay.conf
 
 [ -n "$DISK"          ] || { echo "quay: DISK not set";          exit 1; }
 [ -n "$HOSTNAME"      ] || { echo "quay: HOSTNAME not set";      exit 1; }
-[ -n "$NIC"           ] || { echo "quay: NIC not set";           exit 1; }
+[ -n "$ETH_NIC"       ] || { echo "quay: ETH_NIC not set";       exit 1; }
 [ -n "$LUKS_PASSWORD" ] || { echo "quay: LUKS_PASSWORD not set"; exit 1; }
+[ -n "$ROOT_PASSWORD" ] || { echo "quay: ROOT_PASSWORD not set"; exit 1; }
 [ -b "$DISK"          ] || { echo "quay: $DISK is not a block device"; exit 1; }
 
+# grow tmpfs to fit firmware download
 mount -o remount,size=3G / 2>/dev/null || true
-apk add -q cryptsetup util-linux dosfstools xfsprogs binutils mkinitfs
-# try modern systemd stub first, fallback to stable gummiboot
+
+# preflight deps
+apk add -q cryptsetup util-linux dosfstools xfsprogs binutils mkinitfs efibootmgr
+
+# efistub — systemd-efistub is the current package name on alpine 3.22+
+# fall back to gummiboot-efistub on older releases
 apk add -q systemd-efistub 2>/dev/null || apk add -q gummiboot-efistub
+
 udevadm settle 2>/dev/null || true
 
 printf "quay: 01-disk...\n"   ; . steps/01-disk.sh

@@ -3,8 +3,14 @@ set -e
 
 # 01-disk.sh — partition, luks2 format, xfs inside, mount
 
+# close anything from a previous run
 cryptsetup close quay 2>/dev/null || true
-umount -f "$DISK"* 2>/dev/null || true
+umount -f /mnt/storage /mnt/quay_esp 2>/dev/null || true
+
+# wipe all signatures from the whole disk BEFORE partitioning
+# this prevents sfdisk --wipe always from hitting a busy old partition
+wipefs -a "$DISK"
+sync
 
 # gpt: 1GB esp + rest luks
 sfdisk --wipe always --force --label gpt "$DISK" <<EOF
@@ -15,8 +21,6 @@ device: $DISK
 2 : size=+,     type=ca7d7ccb-63ed-4c53-861c-1742536059cc, name="LUKS"
 EOF
 
-# force kernel to re-read partition table and sync
-sync
 blockdev --rereadpt "$DISK" 2>/dev/null || true
 sync
 
@@ -29,16 +33,13 @@ else
     PART_LUKS="${DISK}2"
 fi
 
-# wait for device nodes with increased resilience
+# wait for device nodes
 i=0; while [ $i -lt 15 ]; do
     [ -b "$PART_ESP" ] && [ -b "$PART_LUKS" ] && break
     mdev -s 2>/dev/null || true; sleep 1; i=$((i+1))
 done
 [ -b "$PART_ESP"  ] || { echo "quay: $PART_ESP not found";  exit 1; }
 [ -b "$PART_LUKS" ] || { echo "quay: $PART_LUKS not found"; exit 1; }
-
-# sfdisk --wipe always handled the headers; extra wipefs often causes race busy errors
-sync
 
 # luks2: aes-xts-plain64, 512bit key, sha512
 echo -n "$LUKS_PASSWORD" | cryptsetup luksFormat -q --type luks2 \

@@ -1,33 +1,29 @@
 # quay.conf — copy to quay.conf, fill in, then run install.sh
 
-# target disk — entire disk will be wiped
 DISK="/dev/nvme0n1"
-
-# system identity
 HOSTNAME="quay"
 TIMEZONE="UTC"
 
-# physical nic to bridge vms through (e.g. eth0, enp3s0)
-NIC="eth0"
+# networking: hot-swappable dual-stack
+# ethernet is prioritized when plugged in; system fails over to wifi seamlessly.
+ETH_NIC="eth0"
+WIFI_NIC="wlan0"
 
-# luks passphrase for the storage partition
+# wifi credentials (optional)
+WIFI_SSID=""
+WIFI_PSK=""
+
+# required
 LUKS_PASSWORD=""
+ROOT_PASSWORD=""  # console access — mandatory even if you use SSH keys
 
-# your ssh public key (paste full ssh-ed25519 ... line)
-SSH_PUBKEY=""
+# recommended: SSH key for remote access
+SSH_PUBKEY=""     # paste your full ssh-ed25519 ... line
 
 # hypervisor tuning — leave blank to skip
-ISOLCPUS=""       # cores to isolate (e.g. "2-7")
-HUGEPAGES="512"   # 2MB hugepages (512 = 1GB)
+ISOLCPUS=""       # cores to isolate for vms (e.g. "2-7")
+HUGEPAGES="512"   # 2MB hugepages (512 = 1GB preallocated)
 VFIO_IDS=""       # pci ids for passthrough (e.g. "10de:2684,10de:228b")
 
-# secure boot — requires keys in /etc/quay/
+# secure boot signing — requires keys in /etc/quay/
 SIGN_UKI=0
-
-# firmware — default is standard hardware baseline (~250MB in RAM)
-# optimized for 95% of server/desktop hardware (iGPU, WiFi, common NICs)
-# FIRMWARE="standard"
-
-# alpine version
-ALPINE_VERSION="v3.21"
-REPOS="https://dl-cdn.alpinelinux.org/alpine"

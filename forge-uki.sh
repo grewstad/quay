@@ -3,7 +3,7 @@ set -e
 
 # forge-uki.sh — build a quay unified kernel image
 # usage: forge-uki.sh <luks_uuid>
-# re-run any time you change vfio ids, cpu isolation, hugepages, etc.
+# re-run any time you change vfio ids, cpu isolation, hugepages, or after a kernel upgrade
 
 LUKS_UUID="$1"
 [ -n "$LUKS_UUID" ] || { echo "usage: forge-uki.sh <luks_uuid>"; exit 1; }
@@ -13,22 +13,25 @@ LUKS_UUID="$1"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-STUB=$(find /usr/lib/systemd/boot/efi /usr/lib/gummiboot /usr/lib /usr/share \
-    -name "linuxx64.efi.stub" 2>/dev/null | head -1)
+# prefer systemd stub (current), fall back to gummiboot (alpine 3.21 and older)
+STUB=$(find /usr/lib/systemd/boot/efi -name "linuxx64.efi.stub" 2>/dev/null | head -1)
+[ -z "$STUB" ] && STUB=$(find /usr/lib/gummiboot -name "linuxx64.efi.stub" 2>/dev/null | head -1)
+[ -z "$STUB" ] && STUB=$(find /usr/lib /usr/share -name "linuxx64.efi.stub" 2>/dev/null | head -1)
+
 KERNEL=$(find /boot -name "vmlinuz-lts" 2>/dev/null | head -1)
 OSREL="/etc/os-release"
 
-[ -n "$STUB"   ] || { echo "quay: forge: linuxx64.efi.stub not found"; exit 1; }
-[ -n "$KERNEL" ] || { echo "quay: forge: no kernel found in /boot";    exit 1; }
+[ -n "$STUB"   ] || { echo "quay: forge: linuxx64.efi.stub not found — install systemd-efistub or gummiboot-efistub"; exit 1; }
+[ -n "$KERNEL" ] || { echo "quay: forge: no kernel in /boot"; exit 1; }
 
-# iommu — detect cpu vendor from live environment
+echo "quay: forge: stub:   $STUB"
+echo "quay: forge: kernel: $KERNEL"
+
+# iommu — detect cpu vendor
 IOMMU="intel_iommu=on"
 grep -qi "amd" /proc/cpuinfo && IOMMU="amd_iommu=on"
 
-# cmdline — every parameter is explicit and traceable
-# alpine_dev:  where initramfs finds the boot device (ESP by label)
-# modloop:     squashfs containing full kernel module tree (copied from ISO in 03-boot.sh)
-# apkovl:      lbu config archive (written by lbu commit to ESP)
+# cmdline — explicit and traceable
 CMDLINE="modules=loop,squashfs,sd-mod,usb-storage,vfat quiet loglevel=3"
 CMDLINE="$CMDLINE $IOMMU iommu=pt"
 CMDLINE="$CMDLINE console=tty0 console=ttyS0,115200"
@@ -43,10 +46,17 @@ CMDLINE="$CMDLINE apkovl=LABEL=QUAY_ESP"
 printf '%s' "$CMDLINE" > "$WORK/cmdline"
 echo "quay: forge: cmdline: $CMDLINE"
 
-# initramfs — vfat needed to mount ESP and read modloop/apkovl
-mkinitfs -F "base xfs nvme network usb virtio storage vfat" -o "$WORK/initramfs"
+# initramfs — vfat required to mount esp and read modloop/apkovl
+mkinitfs -F "base xfs nvme network usb virtio storage vfat" -o "$WORK/initramfs-base"
 
-# section offsets — standard UKI layout
+# combine with cpu microcode if present
+# microcode MUST be the first component in the initrd image
+touch "$WORK/initrd"
+[ -f /boot/intel-ucode.img ] && cat /boot/intel-ucode.img >> "$WORK/initrd"
+[ -f /boot/amd-ucode.img   ] && cat /boot/amd-ucode.img   >> "$WORK/initrd"
+cat "$WORK/initramfs-base" >> "$WORK/initrd"
+
+# section layout
 align_4k() { echo "$(( ($1 + 4095) / 4096 * 4096 ))"; }
 VMA_OSREL=65536
 VMA_CMDL=$(( VMA_OSREL + $(align_4k "$(stat -c%s "$OSREL")") ))
@@ -57,7 +67,7 @@ objcopy \
     --add-section .osrel="$OSREL"           --change-section-vma ".osrel=$VMA_OSREL" \
     --add-section .cmdline="$WORK/cmdline"  --change-section-vma ".cmdline=$VMA_CMDL" \
     --add-section .linux="$KERNEL"          --change-section-vma ".linux=$VMA_KERN" \
-    --add-section .initrd="$WORK/initramfs" --change-section-vma ".initrd=$VMA_INIT" \
+    --add-section .initrd="$WORK/initrd"    --change-section-vma ".initrd=$VMA_INIT" \
     "$STUB" "$WORK/quay.efi"
 
 if [ "${SIGN_UKI:-0}" = "1" ]; then

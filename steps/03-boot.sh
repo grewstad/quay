@@ -13,10 +13,13 @@ mount "$PART_ESP" /mnt/quay_esp
 mkdir -p /mnt/quay_esp/EFI/Linux /mnt/quay_esp/EFI/BOOT /mnt/quay_esp/boot
 
 # modloop: squashfs containing the full kernel module tree
-# alpine's init mounts this at boot to populate /lib/modules
+# alpine's initramfs mounts this to populate /lib/modules at boot
+# search all of /media — alpine may mount the iso at /media/cdrom, /media/vdb, etc.
+# depending on how the iso is presented to the system
 cp /media/cdrom/boot/modloop-lts /mnt/quay_esp/boot/modloop-lts 2>/dev/null \
-    || find /media/cdrom /boot -name "modloop-lts" -exec cp {} /mnt/quay_esp/boot/modloop-lts \; \
-    || { echo "quay: modloop-lts not found — is the Alpine ISO mounted?"; exit 1; }
+    || find /media /boot -name "modloop-lts" 2>/dev/null \
+        | head -1 | xargs -I{} cp {} /mnt/quay_esp/boot/modloop-lts \
+    || { echo "quay: modloop-lts not found — is the alpine iso mounted?"; exit 1; }
 
 cp ./quay.efi /mnt/quay_esp/EFI/BOOT/BOOTX64.EFI
 cp ./quay.efi /mnt/quay_esp/EFI/Linux/quay.efi
