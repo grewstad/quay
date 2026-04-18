@@ -71,7 +71,7 @@ apk add --no-cache \
     iproute2 \
     cryptsetup util-linux dosfstools xfsprogs \
     binutils mkinitfs efibootmgr efi-mkuki \
-    systemd-efistub chrony nftables \
+    gummiboot-efistub chrony nftables \
     ovmf \
     $UCODE
 
