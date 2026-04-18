@@ -7,25 +7,29 @@ set -e
 cryptsetup close quay 2>/dev/null || true
 umount -f /mnt/storage /mnt/quay_esp 2>/dev/null || true
 
-# silence the kernel hotplug dispatcher during all disk operations.
-# mdev fires on every uevent; if it races sfdisk's BLKRRPART ioctl,
-# the kernel returns EBUSY. disabling hotplug eliminates the race entirely.
-echo "" > /proc/sys/kernel/hotplug
+# wipe all signatures from the whole disk before partitioning
+wipefs -a "$DISK"
+sync
 
-wipe_and_partition() {
-    wipefs -a "$DISK"
-    sync
-
-    sfdisk --force "$DISK" <<EOF
+# write the partition table
+sfdisk --force "$DISK" <<EOF
 label: gpt
 device: $DISK
 
 1 : size=1024M, type=c12a7328-f81f-11d2-ba4b-00a0c93ec93b, name="ESP"
 2 : size=+,     type=ca7d7ccb-63ed-4c53-861c-1742536059cc, name="LUKS"
 EOF
-}
 
-wipe_and_partition
+# partx -u: updates the kernel's in-memory partition table using BLKPG ioctls.
+# unlike BLKRRPART (which sfdisk uses internally and which fails when mdev has
+# a file descriptor open), BLKPG operates at partition granularity and does
+# not require the whole device to be idle. this is the correct tool for scripts.
+partx -u "$DISK"
+
+# mdev -s: rebuilds /dev from the kernel's current sysfs state.
+# by the time this runs, the kernel already knows the partition layout (via partx),
+# so mdev creates the nodes correctly with no race.
+mdev -s
 
 # partition naming: nvme/mmcblk use p1/p2, others use 1/2
 if echo "$DISK" | grep -qE "nvme|mmcblk"; then
@@ -36,13 +40,8 @@ else
     PART_LUKS="${DISK}2"
 fi
 
-# re-arm hotplug and rescan — mdev now reads /sys/block cleanly
-# without any competing writes, so the new nodes appear immediately
-echo /sbin/mdev > /proc/sys/kernel/hotplug
-mdev -s
-
-# wait for device nodes
-i=0; while [ $i -lt 15 ]; do
+# wait for device nodes — should be immediate, but virtio can lag
+i=0; while [ $i -lt 10 ]; do
     [ -b "$PART_ESP" ] && [ -b "$PART_LUKS" ] && break
     sleep 1; i=$((i+1))
 done
