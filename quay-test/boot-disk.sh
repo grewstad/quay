@@ -14,7 +14,7 @@ LOCAL_VARS="$ROOT/OVMF_VARS.fd"
 qemu-system-x86_64 \
     -m 4G \
     -smp 4 \
-    -cpu host,svm=on \
+    -cpu host \
     -enable-kvm \
     -drive "if=pflash,format=raw,readonly=on,file=$CODE" \
     -drive "if=pflash,format=raw,file=$LOCAL_VARS" \

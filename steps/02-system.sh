@@ -3,17 +3,17 @@ set -e
 
 # 02-system.sh — configure base alpine and hypervisor environment
 
-# install base system and hypervisor primitives using non-interactive setup tools
 setup-hostname -n "$HOSTNAME"
-setup-timezone -z UTC
+setup-timezone -z "${TIMEZONE:-UTC}"
 printf "nameserver 1.1.1.1\n" > /etc/resolv.conf
 
-# enable repos (main + community)
+# repos
 REL=$(cut -d. -f1,2 /etc/alpine-release)
-printf "https://dl-cdn.alpinelinux.org/alpine/v${REL}/main\nhttps://dl-cdn.alpinelinux.org/alpine/v${REL}/community\n" > /etc/apk/repositories
-apk update
+printf "https://dl-cdn.alpinelinux.org/alpine/v%s/main\nhttps://dl-cdn.alpinelinux.org/alpine/v%s/community\n" \
+    "$REL" "$REL" > /etc/apk/repositories
+apk update -q
 
-# networking: configure bridge br0 containing $NIC
+# networking: bridge for vm traffic
 cat > /etc/network/interfaces <<EOF
 auto lo
 iface lo inet loopback
@@ -28,31 +28,41 @@ iface br0 inet dhcp
     bridge_fd 0
 EOF
 
-[ -n "$ROOT_PASSWORD" ] && echo "root:${ROOT_PASSWORD}" | chpasswd
-# establish host system: standard hardware baseline
-# we avoid the 1GB 'all' collection to survive tmpfs, focusing on 95% common hardware
-FW_BASELINE="intel-microcode amd-microcode linux-firmware-intel linux-firmware-amdgpu linux-firmware-nvidia linux-firmware-bnx2 linux-firmware-bnx2x linux-firmware-rtl_nic linux-firmware-i915"
+# networking must start at boot — without this br0 never comes up
+rc-update add networking boot
 
-apk add --no-cache qemu-system-x86_64 qemu-img bridge-utils iproute2 \
-                cryptsetup cryptsetup-openrc xfsprogs efibootmgr nftables \
-                openssh $FW_BASELINE
+# hypervisor stack
+apk add --no-cache \
+    qemu-system-x86_64 qemu-img \
+    bridge-utils iproute2 \
+    cryptsetup cryptsetup-openrc \
+    xfsprogs efibootmgr binutils \
+    nftables openssh \
+    intel-ucode amd-ucode \
+    linux-firmware
 
-# hardened sshd_config heredoc — removes external template dependency
+# sshd must start at default runlevel — without this the host is unreachable
+rc-update add sshd default
+
+# firmware lives on the encrypted disk, not in RAM
+# move from live rootfs to /mnt/storage (mounted in 01-disk.sh)
+# bind-mounted to /lib/firmware by localmount via fstab (written in 04-persist.sh)
+mkdir -p /mnt/storage/firmware /lib/firmware
+mv /lib/firmware/* /mnt/storage/firmware/ 2>/dev/null || true
+
+# hardened sshd
 mkdir -p /etc/ssh
 cat > /etc/ssh/sshd_config <<EOF
 Port 22
-Protocol 2
 HostKey /etc/ssh/ssh_host_ed25519_key
 PermitRootLogin prohibit-password
 PasswordAuthentication no
-ChallengeResponseAuthentication no
 PubkeyAuthentication yes
-UsePAM no
-KexAlgorithms curve25519-sha256@libssh.org,diffie-hellman-group-exchange-sha256
-Ciphers chacha20-poly1305@openssh.com,aes256-gcm@openssh.com,aes128-gcm@openssh.com
-MACs hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com,umac-128-etm@openssh.com
-PrintMotd no
+KexAlgorithms curve25519-sha256@libssh.org
+Ciphers chacha20-poly1305@openssh.com,aes256-gcm@openssh.com
+MACs hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com
 X11Forwarding no
 AllowTcpForwarding yes
+PrintMotd no
 Subsystem sftp /usr/lib/ssh/sftp-server
 EOF

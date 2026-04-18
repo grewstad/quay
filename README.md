@@ -1,82 +1,122 @@
-# Quay
+# quay
 
-```text
-    __
-  <(O )___,,   quay linux
-   ( ._> //     
-    `----'  
+A minimal Alpine Linux installer that turns a blank disk into a KVM hypervisor host.
+
+Alpine runs entirely from RAM. VM images and config live on a LUKS2-encrypted XFS partition. The host is managed via SSH and QEMU directly — no management layer.
+
+---
+
+## how it works
+
+```
+UEFI → quay.efi (UKI: kernel + initramfs + cmdline)
+     → Alpine ramdisk init
+     → mounts ESP, loads modloop (kernel modules), restores apkovl (config)
+     → dmcrypt opens LUKS → localmount mounts storage + firmware
+     → sshd, nftables, bridge up
 ```
 
-![Version](https://img.shields.io/badge/version-v3.19-blue?style=flat-square) ![Arch](https://img.shields.io/badge/arch-x86__64-orange?style=flat-square) ![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)
+The UKI is a single EFI binary containing the kernel, initramfs, and baked-in kernel parameters. No bootloader, no grub config, no moving parts.
 
-An Alpine-based minimalist L0 hypervisor primitive. Designed for high-performance guest hosting with a zero-cleverness, traceable architecture.
-
----
-
-## Description
-
-Quay is a diskless Alpine Linux installation pattern that boots from a single Unified Kernel Image (UKI). It prioritizes deterministic behavior and standard Linux primitives over complex magic.
-
-### Minimalist
-Install media is ~60MB. The system runs entirely from RAM, ensuring a clean state on every boot.
-
-### Traceable
-No brittle kernel magic strings. LUKS unlocking and filesystem mounting are handled by standard OpenRC services (`dmcrypt`, `localmount`).
-
-### Hardened
-LUKS2 encryption, IOMMU/VFIO hardware isolation, and a minimal attack surface.
+Firmware (`linux-firmware`) lives on the encrypted storage partition and is bind-mounted to `/lib/firmware` at boot. Full hardware compatibility, zero RAM cost.
 
 ---
 
-## Installation
+## requirements
 
-1. Prepare your environment (UEFI required).
-2. Configure the installer:
-   ```bash
-   cp quay.conf.example quay.conf
-   vi quay.conf
-   ```
-3. Run the induction pipeline:
-   ```bash
-   sh install.sh
-   ```
-
-### Technical Induction Stages
-
-**01 Disk**. GPT partitioning (1GB ESP + Storage), LUKS2 formatting, and XFS creation.
-
-**02 System**. Identity configuration, package fulfillment (QEMU, Bridge, SSH), and hardened networking.
-
-**03 Boot**. UKI forging (Kernel + Initramfs + CMDLINE) and UEFI firmware registration.
-
-**04 Persistence**. Explicit service configuration (`dmcrypt`, `localmount`) and initial LBU commit.
+- UEFI firmware (CSM disabled)
+- IOMMU enabled in firmware (VT-d / AMD-Vi) for passthrough
+- Wired ethernet for the bridge NIC
 
 ---
 
-## Configuration
+## install
 
-Parameters are defined in `quay.conf`:
+Boot the [Alpine Linux Standard ISO](https://alpinelinux.org/downloads/) in UEFI mode.
 
-- **DISK**: Target device (e.g., `/dev/nvme0n1`).
-- **HOSTNAME**: System identity.
-- **NIC**: Primary network interface for the bridge.
-- **LUKS_PASSWORD**: Passphrase for the persistent volume.
-- **ISOLCPUS**: (Optional) Cores for isolated guest execution.
-- **HUGEPAGES**: (Optional) Number of 2MB pages for performance.
-- **VFIO_IDS**: (Optional) PCI IDs for hardware passthrough.
+```sh
+# bring up networking
+ip link set eth0 up && udhcpc -i eth0
+
+# get quay
+apk add git
+git clone https://github.com/grewstad/quay
+cd quay
+
+# configure
+cp quay.conf.example quay.conf
+vi quay.conf
+
+# run
+sh install.sh
+```
+
+After completion: `poweroff`, remove install media, boot.
 
 ---
 
-## Persistence
+## configuration
 
-Quay operates in diskless mode. Configuration changes in `/etc` are saved to the encrypted volume via:
+`quay.conf` — fill in before running install.sh:
 
-```bash
+| key | description |
+|-----|-------------|
+| `DISK` | target disk, entire device will be wiped |
+| `HOSTNAME` | system hostname |
+| `NIC` | physical NIC for the VM bridge (e.g. `eth0`) |
+| `LUKS_PASSWORD` | passphrase for the encrypted storage partition |
+| `SSH_PUBKEY` | your public key for root login |
+| `ISOLCPUS` | cores to reserve for VMs (e.g. `2-7`) |
+| `HUGEPAGES` | 2MB hugepages to preallocate (e.g. `512` = 1GB) |
+| `VFIO_IDS` | PCI IDs for hardware passthrough (e.g. `10de:2684`) |
+
+---
+
+## after first boot
+
+LUKS prompts for the passphrase on the serial console. After unlock:
+
+- SSH is available on the physical NIC
+- `br0` is up, ready for VM networking
+- `/mnt/storage` contains your VM images
+
+Launch a VM:
+
+```sh
+qemu-system-x86_64 \
+    -enable-kvm -cpu host -smp 4 -m 8G \
+    -drive file=/mnt/storage/vm.qcow2,if=virtio \
+    -netdev bridge,id=n0,br=br0 -device virtio-net,netdev=n0 \
+    -nographic
+```
+
+Save config changes:
+
+```sh
 lbu commit
 ```
 
+Rebuild the UKI after changing boot parameters:
+
+```sh
+sh forge-uki.sh <luks-uuid>
+```
+
 ---
 
-## License
+## disk layout
+
+```
+sdX1   ESP (FAT32, 1GB)    quay.efi, modloop, apkovl
+sdX2   LUKS2 container
+         └─ XFS
+              ├─ firmware/     linux-firmware (bind-mounted to /lib/firmware)
+              ├─ cache/        apk package cache
+              └─ *.qcow2       VM disk images
+```
+
+---
+
+## license
 
 MIT

@@ -1,14 +1,12 @@
 #!/bin/sh
 set -e
 
-# 01-disk.sh — partition, luks2 format, xfs inside
+# 01-disk.sh — partition, luks2 format, xfs inside, mount
 
-# cleanup previous attempts
 cryptsetup close quay 2>/dev/null || true
 umount -f "$DISK"* 2>/dev/null || true
 
-# partition: 1GB esp, rest storage
-# uses standard LUKS guid: CA7D7CCB-63ED-4C53-861C-1742536059CC
+# gpt: 1GB esp + rest luks
 sfdisk --wipe always --force --label gpt "$DISK" <<EOF
 label: gpt
 device: $DISK
@@ -17,44 +15,37 @@ device: $DISK
 2 : size=+,     type=ca7d7ccb-63ed-4c53-861c-1742536059cc, name="LUKS"
 EOF
 
-# discover partitions
-PART_ESP="${DISK}1"
-PART_LUKS="${DISK}2"
-# handle nvme/mmcblk (p1, p2)
+# partition naming: nvme/mmcblk use p1/p2, others use 1/2
 if echo "$DISK" | grep -qE "nvme|mmcblk"; then
     PART_ESP="${DISK}p1"
     PART_LUKS="${DISK}p2"
+else
+    PART_ESP="${DISK}1"
+    PART_LUKS="${DISK}2"
 fi
 
 # wait for device nodes
-for i in $(seq 1 10); do
+i=0; while [ $i -lt 10 ]; do
     [ -b "$PART_ESP" ] && [ -b "$PART_LUKS" ] && break
-    mdev -s 2>/dev/null || true
-    sleep 1
+    mdev -s 2>/dev/null || true; sleep 1; i=$((i+1))
 done
+[ -b "$PART_ESP"  ] || { echo "quay: $PART_ESP not found";  exit 1; }
+[ -b "$PART_LUKS" ] || { echo "quay: $PART_LUKS not found"; exit 1; }
 
-[ -b "$PART_ESP"  ] || { ls -l /dev/vd*; echo "quay: error: esp partition $PART_ESP not found";  exit 1; }
-[ -b "$PART_LUKS" ] || { echo "quay: error: luks partition $PART_LUKS not found"; exit 1; }
+wipefs -af "$PART_LUKS"
 
-# ensure clean partition
-for i in $(seq 1 5); do
-    wipefs -af "$PART_LUKS" && break
-    sleep 1
-done
-mdev -s 2>/dev/null || true
-sleep 2
-
-# luks2 format and open
+# luks2: aes-xts-plain64, 512bit key, sha512
 echo -n "$LUKS_PASSWORD" | cryptsetup luksFormat -q --type luks2 \
     -c aes-xts-plain64 -s 512 --hash sha512 "$PART_LUKS" -
-mdev -s 2>/dev/null || true
-sleep 1
 echo -n "$LUKS_PASSWORD" | cryptsetup open "$PART_LUKS" quay -
 
 # filesystems
 mkfs.fat -n QUAY_ESP -F32 "$PART_ESP"
 mkfs.xfs -f -m reflink=1 -L QUAY /dev/mapper/quay
 
-# variables stay in local shell sesson for subsequent sourced steps
+# mount storage now — stays mounted through all subsequent steps
+mkdir -p /mnt/storage
+mount /dev/mapper/quay /mnt/storage
+
 LUKS_UUID=$(cryptsetup luksUUID "$PART_LUKS")
 export PART_ESP PART_LUKS LUKS_UUID
