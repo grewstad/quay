@@ -11,6 +11,7 @@ rc-update add dmcrypt boot
 # 1. encrypted storage partition (opened by dmcrypt before localmount runs)
 # 2. firmware bind-mount: full hw compat, zero RAM cost
 cat >> /etc/fstab <<EOF
+LABEL=QUAY_ESP            /media/QUAY_ESP   vfat  defaults  0 0
 /dev/mapper/quay          /mnt/storage      xfs   defaults  0 0
 /mnt/storage/firmware     /lib/firmware     none  bind      0 0
 EOF

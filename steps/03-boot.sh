@@ -23,7 +23,7 @@ cp /media/cdrom/boot/modloop-lts /media/QUAY_ESP/boot/modloop-lts 2>/dev/null \
 
 cp ./quay.efi /media/QUAY_ESP/EFI/BOOT/BOOTX64.EFI
 cp ./quay.efi /media/QUAY_ESP/EFI/Linux/quay.efi
-umount /media/QUAY_ESP
+# keep mounted for 04-persist.sh
 
 # register UEFI boot entry if efivars are accessible
 if [ -d /sys/firmware/efi/efivars ]; then
