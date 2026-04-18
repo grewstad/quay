@@ -8,14 +8,15 @@ cryptsetup close quay 2>/dev/null || true
 umount -f /mnt/storage /mnt/quay_esp 2>/dev/null || true
 
 # wipe all signatures from the whole disk BEFORE partitioning
-# this prevents sfdisk --wipe always from hitting a busy old partition
 wipefs -a "$DISK"
 sync
 
 # gpt: 1GB esp + rest luks
-# --lock: acquires exclusive flock(2) on the disk before writing.
-# mdev/udev respect this lock and skip probing, eliminating the BLKRRPART EBUSY race.
-sfdisk --lock --force "$DISK" <<EOF
+# --wipe-partitions always: clears signatures on the new partition regions right as
+# sfdisk creates them — this is the flag alpine's own setup-disk uses.
+# NOT --wipe always (whole disk wipe mid-script = race) or --lock (busybox mdev
+# does not implement the flock udev locking protocol, so --lock does nothing here).
+sfdisk --force --wipe-partitions always "$DISK" <<EOF
 label: gpt
 device: $DISK
 
@@ -23,11 +24,10 @@ device: $DISK
 2 : size=+,     type=ca7d7ccb-63ed-4c53-861c-1742536059cc, name="LUKS"
 EOF
 
-# belt-and-suspenders: force the kernel to adopt the new table
-# sfdisk --lock should have handled the ioctl cleanly, but on virtio+mdev
-# the kernel sometimes needs a second nudge before the nodes appear.
-blockdev --rereadpt "$DISK" 2>/dev/null || true
-sync
+# rescan: mdev -s is how alpine populates /dev after partition table changes.
+# blockdev --rereadpt can fail if the new nodes aren't ready yet; mdev -s
+# reads /sys/block directly and creates the nodes regardless.
+mdev -s 2>/dev/null || true
 
 # partition naming: nvme/mmcblk use p1/p2, others use 1/2
 if echo "$DISK" | grep -qE "nvme|mmcblk"; then
@@ -38,18 +38,13 @@ else
     PART_LUKS="${DISK}2"
 fi
 
-# wait for device nodes
+# wait for device nodes (mdev -s should have created them, but virtio can lag)
 i=0; while [ $i -lt 15 ]; do
     [ -b "$PART_ESP" ] && [ -b "$PART_LUKS" ] && break
     mdev -s 2>/dev/null || true; sleep 1; i=$((i+1))
 done
 [ -b "$PART_ESP"  ] || { echo "quay: $PART_ESP not found";  exit 1; }
 [ -b "$PART_LUKS" ] || { echo "quay: $PART_LUKS not found"; exit 1; }
-
-# wipe partition signatures — at this point the nodes are confirmed stable
-wipefs -af "$PART_ESP"
-wipefs -af "$PART_LUKS"
-sync
 
 # luks2: aes-xts-plain64, 512bit key, sha512
 echo -n "$LUKS_PASSWORD" | cryptsetup luksFormat -q --type luks2 \
