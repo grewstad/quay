@@ -36,9 +36,10 @@ mkdir -p /media/QUAY_ESP/cache
 setup-apkcache /media/QUAY_ESP
 
 # populate the cache now — packages were installed with --no-cache in 02-system.sh
-# so the cache is currently empty. alpine's initramfs will fail to find /sbin/init
-# (packages can't be reinstalled) if the cache is empty and the network isn't up yet.
-apk cache download
+# so the cache is currently empty. alpine's initramfs uses apk add --no-network at
+# boot which only installs from cache, so the cache MUST be populated here.
+# apk cache download (no args) is a no-op in apk-tools 2.x — use apk fetch -R.
+apk fetch -R -o /media/QUAY_ESP/cache/ $(cat /etc/apk/world | tr '\n' ' ')
 
 # lbu on ESP — apkovl readable without LUKS at boot
 setup-lbu /media/QUAY_ESP
