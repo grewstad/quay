@@ -35,6 +35,11 @@ rc-update add local default
 mkdir -p /media/QUAY_ESP/cache
 setup-apkcache /media/QUAY_ESP
 
+# populate the cache now — packages were installed with --no-cache in 02-system.sh
+# so the cache is currently empty. alpine's initramfs will fail to find /sbin/init
+# (packages can't be reinstalled) if the cache is empty and the network isn't up yet.
+apk cache download
+
 # lbu on ESP — apkovl readable without LUKS at boot
 setup-lbu /media/QUAY_ESP
 cat > /etc/lbu/lbu.conf <<EOF
