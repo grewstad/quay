@@ -34,8 +34,8 @@ printf "quay: 01-disk...\n"   ; . steps/01-disk.sh
 # wire the ESP cache before any apk installs — this is the correct Alpine
 # diskless pattern. apk add calls in 02-system.sh then automatically cache
 # every package to the ESP with APKINDEX maintained by apk itself.
-mkdir -p /media/QUAY_ESP/cache/x86_64
-setup-apkcache /media/QUAY_ESP/cache/x86_64
+mkdir -p /media/QUAY_ESP/cache
+setup-apkcache /media/QUAY_ESP/cache
 
 printf "quay: 02-system...\n" ; . steps/02-system.sh
 printf "quay: 03-boot...\n"   ; . steps/03-boot.sh

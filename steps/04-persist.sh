@@ -30,14 +30,10 @@ rc-update add local default
 
 # apk cache on the ESP — packages were already cached here during step 02
 # because setup-apkcache was wired in install.sh before the apk add calls.
-# sync downloads anything that was missed (transitive deps, preflight packages)
-# then index generates the APKINDEX the initramfs needs to use this dir as a
-# local repository, and .boot_repository is the alpine sentinel that tells
-# the initramfs to mount and use this directory as a boot-time package source.
+# sync downloads anything that was missed (transitive deps, preflight packages).
+# Alpine's initramfs automatically uses /etc/apk/cache (symlinked to this dir)
+# to install the base system offline without needing .boot_repository or a local index.
 apk cache sync
-apk index --no-warnings -o /media/QUAY_ESP/cache/x86_64/APKINDEX.tar.gz \
-    /media/QUAY_ESP/cache/x86_64/*.apk
-touch /media/QUAY_ESP/cache/.boot_repository
 
 
 # lbu on ESP — apkovl readable without LUKS at boot
