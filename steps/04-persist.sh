@@ -35,8 +35,8 @@ rc-update add local default
 # local repository, and .boot_repository is the alpine sentinel that tells
 # the initramfs to mount and use this directory as a boot-time package source.
 apk cache sync
-apk index --no-warnings -o /media/QUAY_ESP/cache/APKINDEX.tar.gz \
-    /media/QUAY_ESP/cache/*.apk
+apk index --no-warnings -o /media/QUAY_ESP/cache/x86_64/APKINDEX.tar.gz \
+    /media/QUAY_ESP/cache/x86_64/*.apk
 touch /media/QUAY_ESP/cache/.boot_repository
 
 
