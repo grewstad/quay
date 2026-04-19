@@ -21,10 +21,10 @@ set -e
 # firmware is now fetched directly to encrypted storage, not loaded here
 mount -o remount,size=4G / 2>/dev/null || true
 
-# preflight deps
-apk add -q cryptsetup util-linux dosfstools xfsprogs binutils mkinitfs efibootmgr
+# preflight deps — binutils (objcopy), efi-mkuki, efistub, luks/fs tools
+apk add -q cryptsetup util-linux dosfstools xfsprogs binutils mkinitfs efibootmgr efi-mkuki
 
-# efistub: systemd-efistub on alpine 3.22+, gummiboot-efistub on older
+# efistub: systemd-efistub preferred (alpine 3.22+/3.23); fall back to gummiboot on older
 apk add -q systemd-efistub 2>/dev/null || apk add -q gummiboot-efistub
 
 mdev -s 2>/dev/null || true
