@@ -29,18 +29,8 @@ cp ./quay.efi /media/QUAY_ESP/EFI/Linux/quay.efi
 if [ -d /sys/firmware/efi/efivars ]; then
     esp_disk=$(lsblk -pno PKNAME "$PART_ESP")
     esp_num=$(lsblk -no PARTN "$PART_ESP")
-    # Clear old entries
     efibootmgr | awk '/quay/{print $1}' | sed 's/Boot//;s/\*//' \
-        | xargs -r -I{} efibootmgr -b {} -B
-    
-    # Create new entry
+        | xargs -r -I{} efibootmgr -b {} -B >/dev/null 2>&1 || true
     efibootmgr -c -d "$esp_disk" -p "$esp_num" \
-        -L "quay" -l '\EFI\Linux\quay.efi'
-    
-    # Force it to the top of the order
-    NEW_BOOT=$(efibootmgr | awk '/quay/{print $1}' | sed 's/Boot//;s/\*//' | head -1)
-    if [ -n "$NEW_BOOT" ]; then
-        ORDER=$(efibootmgr | awk '/BootOrder:/ {print $2}')
-        efibootmgr -o "$NEW_BOOT,$ORDER"
-    fi
+        -L "quay" -l '\EFI\Linux\quay.efi' >/dev/null 2>&1 || true
 fi

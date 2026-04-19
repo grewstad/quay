@@ -31,10 +31,6 @@ partx -u "$DISK"
 # so mdev creates the nodes correctly with no race.
 mdev -s
 
-# set GPT attributes: 0 (system partition), 2 (legacy BIOS bootable)
-# some firmwares require these to acknowledge the ESP as bootable.
-sgdisk "$DISK" --attributes=1:set:0 --attributes=1:set:2
-
 # partition naming: nvme/mmcblk use p1/p2, others use 1/2
 if echo "$DISK" | grep -qE "nvme|mmcblk"; then
     PART_ESP="${DISK}p1"
