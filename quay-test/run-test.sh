@@ -25,7 +25,6 @@ qemu-system-x86_64 \
     -drive "if=pflash,format=raw,file=$LOCAL_VARS" \
     -drive "file=$ROOT/target.qcow2,format=qcow2,if=virtio,index=0" \
     -drive "file=$ISO,format=raw,if=virtio,index=1,readonly=on" \
-    -boot d \
     -netdev user,id=n1 \
     -device virtio-net-pci,netdev=n1 \
     -chardev stdio,id=char0,mux=on,logfile="$ROOT/serial.log" \

@@ -58,8 +58,6 @@ cat "$WORK/initramfs-base" >> "$WORK/initrd"
 
 # build UKI using standard primitive
 # efi-mkuki handles VMA offsets, alignment, and PE header updates correctly
-# build UKI using standard primitive
-# efi-mkuki handles VMA offsets, alignment, and PE header updates correctly
 efi-mkuki \
     -o "$WORK/quay.efi" \
     -c "$WORK/cmdline" \

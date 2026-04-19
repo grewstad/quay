@@ -8,8 +8,6 @@ set -e
 
 sh ./forge-uki.sh "$LUKS_UUID"
 
-mkdir -p /media/QUAY_ESP
-mount "$PART_ESP" /media/QUAY_ESP
 mkdir -p /media/QUAY_ESP/EFI/Linux /media/QUAY_ESP/EFI/BOOT /media/QUAY_ESP/boot
 
 # modloop: squashfs containing the full kernel module tree
@@ -23,7 +21,6 @@ cp /media/cdrom/boot/modloop-lts /media/QUAY_ESP/boot/modloop-lts 2>/dev/null \
 
 cp ./quay.efi /media/QUAY_ESP/EFI/BOOT/BOOTX64.EFI
 cp ./quay.efi /media/QUAY_ESP/EFI/Linux/quay.efi
-# keep mounted for 04-persist.sh
 
 # register UEFI boot entry if efivars are accessible
 if [ -d /sys/firmware/efi/efivars ]; then

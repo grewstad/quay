@@ -61,7 +61,7 @@ rc-update add networking boot
 # persistent world wastes 7MB on every boot for something the host never uses again.
 # ovmf: uefi firmware for guest vms (windows, gpu passthrough, secure boot guests)
 # chrony: diskless alpine resets clock to epoch on every boot without it
-apk add --no-cache \
+apk add \
     qemu-system-x86_64 qemu-img \
     bridge-utils iproute2 \
     cryptsetup cryptsetup-openrc \
@@ -86,7 +86,7 @@ for pkg in /mnt/storage/fw-dl/*.apk; do
 done
 [ -d /mnt/storage/fw-dl/lib/firmware ] && cp -a /mnt/storage/fw-dl/lib/firmware/. /mnt/storage/firmware/
 rm -rf /mnt/storage/fw-dl
-apk add --no-cache linux-firmware-none 2>/dev/null || true
+apk add linux-firmware-none 2>/dev/null || true
 
 # hardened sshd
 mkdir -p /etc/ssh

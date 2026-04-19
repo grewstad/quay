@@ -30,6 +30,12 @@ apk add -q systemd-efistub 2>/dev/null || apk add -q gummiboot-efistub
 mdev -s 2>/dev/null || true
 
 printf "quay: 01-disk...\n"   ; . steps/01-disk.sh
+
+# wire the ESP cache before any apk installs — this is the correct Alpine
+# diskless pattern. apk add calls in 02-system.sh then automatically cache
+# every package to the ESP with APKINDEX maintained by apk itself.
+setup-apkcache /media/QUAY_ESP
+
 printf "quay: 02-system...\n" ; . steps/02-system.sh
 printf "quay: 03-boot...\n"   ; . steps/03-boot.sh
 printf "quay: 04-persist...\n"; . steps/04-persist.sh

@@ -28,20 +28,16 @@ EOF
 chmod +x /etc/local.d/10-firmware-reload
 rc-update add local default
 
-# apk cache on the ESP — critical
-# during initramfs boot, alpine reinstalls packages from /etc/apk/world BEFORE
-# luks is open. the cache must be on the esp (/media/QUAY_ESP) which is
-# accessible without luks. cache on the luks partition = zero packages after boot.
-mkdir -p /media/QUAY_ESP/cache
-
-# fetch ALL world packages + transitive deps to the ESP cache BEFORE setup-apkcache.
-# setup-apkcache redirects /etc/apk/cache to the still-empty ESP dir, which causes
-# apk to use an empty APKINDEX and report every package as "no such package".
-# fetch first (while APK has its live working APKINDEX), then wire the symlink.
-apk fetch -R -o /media/QUAY_ESP/cache/ $(cat /etc/apk/world | tr '\n' ' ')
-
-# now configure APK to use the ESP cache for boot-time installs
-setup-apkcache /media/QUAY_ESP
+# apk cache on the ESP — packages were already cached here during step 02
+# because setup-apkcache was wired in install.sh before the apk add calls.
+# sync downloads anything that was missed (transitive deps, preflight packages)
+# then index generates the APKINDEX the initramfs needs to use this dir as a
+# local repository, and .boot_repository is the alpine sentinel that tells
+# the initramfs to mount and use this directory as a boot-time package source.
+apk cache sync
+apk index --no-warnings -o /media/QUAY_ESP/cache/APKINDEX.tar.gz \
+    /media/QUAY_ESP/cache/*.apk
+touch /media/QUAY_ESP/cache/.boot_repository
 
 
 # lbu on ESP — apkovl readable without LUKS at boot

@@ -67,7 +67,12 @@ install.sh:
     mkfs.fat -F32 vda1 (label: QUAY_ESP)
     mkfs.xfs -m reflink=1 /dev/mapper/quay (label: QUAY)
     mounts /dev/mapper/quay → /mnt/storage
+    mounts vda1 → /media/QUAY_ESP  (stays mounted through all subsequent steps)
     exports: PART_ESP, PART_LUKS, LUKS_UUID
+
+  install.sh wires cache (between 01 and 02):
+    setup-apkcache /media/QUAY_ESP
+    all subsequent apk add calls cache packages to the ESP with APKINDEX
 
   02-system.sh:
     setup-hostname, setup-timezone
@@ -111,7 +116,7 @@ install.sh:
       mkinitfs -F "base xfs nvme network usb virtio storage vfat"
       objcopy: .osrel .cmdline .linux .initrd → quay.efi
       [sbsign]  if SIGN_UKI=1
-    mount ESP → /mnt/quay_esp
+    ESP already mounted from 01-disk.sh
     find modloop-lts in /media (wherever alpine mounted the iso) → ESP/boot/
     cp quay.efi → EFI/BOOT/BOOTX64.EFI and EFI/Linux/quay.efi
     efibootmgr registers quay entry
@@ -125,8 +130,10 @@ install.sh:
     rc-update add localmount boot
     writes /etc/local.d/10-firmware-reload (udevadm trigger after bind-mount)
     rc-update add local default
-    setup-apkcache /media/QUAY_ESP  ← cache on ESP, accessible without LUKS
-    setup-lbu /mnt/quay_esp
+    apk cache sync                   (fills any gaps from step 02 installs)
+    apk index                        (generates APKINDEX for initramfs repo use)
+    touch cache/.boot_repository     (alpine sentinel: treat as boot-time repo)
+    setup-lbu /media/QUAY_ESP
     writes /etc/lbu/lbu.conf (LBU_MEDIA=QUAY_ESP)
     copies OVMF_VARS.fd → /mnt/storage/OVMF_VARS.fd
     writes /root/.ssh/authorized_keys (if SSH_PUBKEY set)
@@ -321,15 +328,15 @@ apk upgrade
 
 # rebuild modloop on ESP (updates kernel and modules)
 # requires ~8GB free RAM for the modloop squashfs rebuild
-mount /dev/disk/by-label/QUAY_ESP /mnt/quay_esp
-update-kernel /mnt/quay_esp
+mount /dev/disk/by-label/QUAY_ESP /media/QUAY_ESP
+update-kernel /media/QUAY_ESP
 
 # rebuild UKI with updated kernel
 cd ~/quay
 sh forge-uki.sh $(cryptsetup luksUUID /dev/disk/by-label/QUAY)
-cp quay.efi /mnt/quay_esp/EFI/Linux/quay.efi
-cp quay.efi /mnt/quay_esp/EFI/BOOT/BOOTX64.EFI
-umount /mnt/quay_esp
+cp quay.efi /media/QUAY_ESP/EFI/Linux/quay.efi
+cp quay.efi /media/QUAY_ESP/EFI/BOOT/BOOTX64.EFI
+umount /media/QUAY_ESP
 
 lbu commit
 ```

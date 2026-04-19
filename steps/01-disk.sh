@@ -5,7 +5,7 @@ set -e
 
 # close anything from a previous run
 cryptsetup close quay 2>/dev/null || true
-umount -f /mnt/storage /mnt/quay_esp 2>/dev/null || true
+umount -f /mnt/storage /media/QUAY_ESP 2>/dev/null || true
 
 # wipe all signatures from the whole disk before partitioning
 wipefs -a "$DISK"
@@ -63,3 +63,8 @@ mount /dev/mapper/quay /mnt/storage
 
 LUKS_UUID=$(cryptsetup luksUUID "$PART_LUKS")
 export PART_ESP PART_LUKS LUKS_UUID
+
+# mount ESP now — wired early so setup-apkcache can be called before step 02
+# and all apk installs in 02-system.sh automatically populate the ESP cache
+mkdir -p /media/QUAY_ESP
+mount "$PART_ESP" /media/QUAY_ESP
