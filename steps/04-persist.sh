@@ -34,17 +34,13 @@ rc-update add local default
 
 apk cache sync
 
-# 1. Install abuild temporarily to sign our local repository index
-apk add -q abuild
-
-# 2. Generate signing key (saved to /etc/apk/keys/ automatically via -a)
-abuild-keygen -q -a -n
+# 1. Sign local repository index (abuild is already installed)
 
 # 3. Centralize the cache into the required x86_64 architecture folder
 mkdir -p /media/QUAY_ESP/cache/x86_64
 mv /media/QUAY_ESP/cache/*.apk /media/QUAY_ESP/cache/x86_64/ 2>/dev/null || true
 
-# 4. Generate the index and sign it with the trusted key
+# 3. Generate the index and sign it with the trusted key
 apk index --no-warnings -o /media/QUAY_ESP/cache/x86_64/APKINDEX.tar.gz \
     /media/QUAY_ESP/cache/x86_64/*.apk
 abuild-sign /media/QUAY_ESP/cache/x86_64/APKINDEX.tar.gz

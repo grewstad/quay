@@ -46,8 +46,11 @@ CMDLINE="$CMDLINE apkovl=LABEL=QUAY_ESP"
 printf '%s' "$CMDLINE" > "$WORK/cmdline"
 echo "quay: forge: cmdline: $CMDLINE"
 
-# initramfs — vfat required to mount esp and read modloop/apkovl
-mkinitfs -F "base xfs nvme network usb virtio storage vfat" -o "$WORK/initramfs-base"
+# initramfs — vfat required to mount esp and read modloop/apkovl.
+# include /etc/apk/keys so the initramfs can verify our signed local repository.
+mkinitfs -F "base xfs nvme network usb virtio storage vfat" \
+         -i /etc/apk/keys \
+         -o "$WORK/initramfs-base"
 
 # combine with cpu microcode if present
 # microcode MUST be the first component in the initrd image
