@@ -28,12 +28,32 @@ EOF
 chmod +x /etc/local.d/10-firmware-reload
 rc-update add local default
 
-# apk cache on the ESP — packages were already cached here during step 02
-# because setup-apkcache was wired in install.sh before the apk add calls.
-# sync downloads anything that was missed (transitive deps, preflight packages).
-# Alpine's initramfs automatically uses /etc/apk/cache (symlinked to this dir)
-# to install the base system offline without needing .boot_repository or a local index.
+# apk cache on the ESP — packages were already cached here during step 02.
+# We turn this cache into a signed, formal local repository to ensure initramfs
+# can reliably install the base system completely offline.
+
 apk cache sync
+
+# 1. Install abuild temporarily to sign our local repository index
+apk add -q abuild
+
+# 2. Generate signing key (saved to /etc/apk/keys/ automatically via -a)
+abuild-keygen -q -a -n
+
+# 3. Centralize the cache into the required x86_64 architecture folder
+mkdir -p /media/QUAY_ESP/cache/x86_64
+mv /media/QUAY_ESP/cache/*.apk /media/QUAY_ESP/cache/x86_64/ 2>/dev/null || true
+
+# 4. Generate the index and sign it with the trusted key
+apk index --no-warnings -o /media/QUAY_ESP/cache/x86_64/APKINDEX.tar.gz \
+    /media/QUAY_ESP/cache/x86_64/*.apk
+abuild-sign /media/QUAY_ESP/cache/x86_64/APKINDEX.tar.gz
+
+# 5. Create sentinel so initramfs knows to treat this as a repository
+touch /media/QUAY_ESP/cache/.boot_repository
+
+# 6. Remove abuild so it doesn't inflate the persistent apkovl
+apk del -q abuild
 
 
 # lbu on ESP — apkovl readable without LUKS at boot
